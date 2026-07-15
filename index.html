@@ -1,0 +1,826 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Clover Chat Prototype</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #eeeeef;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    padding: 18px;
+  }
+
+  .iphone {
+    width: min(393px, calc((100vh - 36px) * 0.461));
+    height: min(852px, calc(100vh - 36px));
+    min-width: 320px;
+    min-height: 694px;
+    background: #000;
+    border-radius: 55px;
+    position: relative;
+    box-shadow:
+      0 0 0 2px #3a3a3a,
+      0 0 0 4px #1a1a1a,
+      0 28px 70px rgba(0, 0, 0, 0.28);
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  .iphone::before {
+    content: "";
+    position: absolute;
+    left: -4px;
+    top: 120px;
+    width: 4px;
+    height: 36px;
+    background: #3a3a3a;
+    border-radius: 2px 0 0 2px;
+    box-shadow: 0 52px 0 #3a3a3a, 0 100px 0 #3a3a3a;
+  }
+
+  .iphone::after {
+    content: "";
+    position: absolute;
+    right: -4px;
+    top: 170px;
+    width: 4px;
+    height: 72px;
+    background: #3a3a3a;
+    border-radius: 0 2px 2px 0;
+  }
+
+  .screen {
+    position: absolute;
+    inset: 0;
+    background: #fff;
+    border-radius: 55px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .dynamic-island {
+    position: absolute;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 120px;
+    height: 34px;
+    background: #000;
+    border-radius: 20px;
+    z-index: 100;
+  }
+
+  .status-bar {
+    height: 59px;
+    background: #fff;
+    display: flex;
+    align-items: flex-end;
+    padding: 0 28px 8px;
+    justify-content: space-between;
+    flex-shrink: 0;
+    z-index: 10;
+  }
+
+  .status-time {
+    font-size: 15px;
+    font-weight: 600;
+    color: #000;
+    letter-spacing: 0;
+  }
+
+  .status-icons {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .status-icons svg {
+    width: 17px;
+    height: 12px;
+    fill: #000;
+  }
+
+  .nav-bar {
+    background: rgba(255, 255, 255, 0.92);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 0.5px solid rgba(0, 0, 0, 0.1);
+    padding: 8px 16px 10px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+    z-index: 10;
+  }
+
+  .nav-back {
+    color: #007aff;
+    font-size: 17px;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .nav-back svg {
+    width: 11px;
+    height: 18px;
+    fill: none;
+    stroke: #007aff;
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .nav-contact {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .nav-avatar {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    background: #cfe4e5;
+    border: 1px solid rgba(0, 0, 0, 0.04);
+    object-fit: cover;
+    margin-bottom: 1px;
+  }
+
+  .nav-name {
+    font-size: 12px;
+    color: #000;
+    font-weight: 400;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+  }
+
+  .nav-name svg {
+    width: 10px;
+    height: 10px;
+    fill: none;
+    stroke: #8e8e93;
+    stroke-width: 2;
+  }
+
+  .nav-video {
+    color: #007aff;
+    display: flex;
+    align-items: center;
+  }
+
+  .nav-video svg {
+    width: 28px;
+    height: 20px;
+    fill: #007aff;
+  }
+
+  .messages-area {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 8px 0;
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .messages-area::-webkit-scrollbar { display: none; }
+
+  .date-sep {
+    text-align: center;
+    font-size: 12px;
+    color: #8e8e93;
+    padding: 8px 0 4px;
+    font-weight: 400;
+  }
+
+  .message-row {
+    display: flex;
+    padding: 2px 16px;
+    align-items: flex-end;
+    gap: 8px;
+    animation: msgAppear 0.24s ease-out;
+  }
+
+  @keyframes msgAppear {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .message-row.sent { justify-content: flex-end; }
+  .message-row.received { justify-content: flex-start; }
+
+  .bubble {
+    max-width: 260px;
+    padding: 8px 12px;
+    border-radius: 18px;
+    font-size: 14px;
+    line-height: 1.32;
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+    position: relative;
+  }
+
+  .bubble.received {
+    background: #e9e9eb;
+    color: #000;
+    border-bottom-left-radius: 5px;
+    max-width: 248px;
+  }
+
+  .bubble.sent {
+    background: #007aff;
+    color: #fff;
+    border-bottom-right-radius: 5px;
+  }
+
+  .typing-bubble {
+    background: #e9e9eb;
+    border-radius: 18px;
+    border-bottom-left-radius: 5px;
+    padding: 12px 16px;
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    width: 60px;
+  }
+
+  .typing-dot {
+    width: 7px;
+    height: 7px;
+    background: #8e8e93;
+    border-radius: 50%;
+    animation: typingBounce 1.2s infinite ease-in-out;
+  }
+
+  .typing-dot:nth-child(1) { animation-delay: 0s; }
+  .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+  .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+  @keyframes typingBounce {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+    30% { transform: translateY(-4px); opacity: 1; }
+  }
+
+  .input-bar {
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-top: 0.5px solid rgba(0, 0, 0, 0.12);
+    padding: 8px 12px 28px;
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .input-app-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: #fff;
+    border: 1.5px solid #c7c7cc;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .input-app-btn svg {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: #8e8e93;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .input-wrap {
+    flex: 1;
+    border: 1.5px solid #c7c7cc;
+    border-radius: 20px;
+    display: flex;
+    align-items: flex-end;
+    padding: 6px 10px 6px 14px;
+    gap: 8px;
+    background: #fff;
+    min-width: 0;
+  }
+
+  .input-field {
+    flex: 1;
+    border: none;
+    outline: none;
+    font-size: 16px;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    resize: none;
+    max-height: 80px;
+    line-height: 1.4;
+    background: transparent;
+    color: #000;
+    min-width: 0;
+  }
+
+  .input-field::placeholder { color: #8e8e93; }
+
+  .send-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: #007aff;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: transform 0.1s, opacity 0.1s;
+    opacity: 0.35;
+    pointer-events: none;
+  }
+
+  .send-btn.active {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .send-btn:active { transform: scale(0.92); }
+
+  .send-btn svg {
+    width: 16px;
+    height: 16px;
+    fill: #fff;
+  }
+
+  @media (max-height: 730px) {
+    body { padding: 10px; }
+
+    .iphone {
+      height: calc(100vh - 20px);
+      width: calc((100vh - 20px) * 0.461);
+      min-width: 0;
+      min-height: 0;
+    }
+
+    .bubble {
+      font-size: 13px;
+      max-width: calc(100% - 60px);
+    }
+  }
+</style>
+</head>
+<body>
+<div class="iphone">
+  <div class="screen">
+    <div class="dynamic-island"></div>
+
+    <div class="status-bar">
+      <div class="status-time" id="statusTime">9:41</div>
+      <div class="status-icons" aria-hidden="true">
+        <svg viewBox="0 0 17 12"><rect x="0" y="5" width="3" height="7" rx="0.5"/><rect x="4.5" y="3" width="3" height="9" rx="0.5"/><rect x="9" y="1" width="3" height="11" rx="0.5"/><rect x="13.5" y="0" width="3" height="12" rx="0.5" opacity="0.3"/></svg>
+        <svg viewBox="0 0 16 12" width="16" height="12"><path d="M8 9.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3z" fill="#000"/><path d="M3.5 6.5C4.9 5.1 6.4 4.5 8 4.5s3.1.6 4.5 2" stroke="#000" stroke-width="1.5" fill="none" stroke-linecap="round"/><path d="M1 4C3 2 5.4 1 8 1s5 1 7 3" stroke="#000" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+        <svg viewBox="0 0 25 12" width="25" height="12">
+          <rect x="0.5" y="0.5" width="21" height="11" rx="3" stroke="#000" stroke-width="1" fill="none"/>
+          <rect x="22" y="4" width="2.5" height="4" rx="1" fill="#000" opacity="0.4"/>
+          <rect x="1.5" y="1.5" width="18" height="9" rx="2" fill="#000"/>
+        </svg>
+      </div>
+    </div>
+
+    <div class="nav-bar">
+      <div class="nav-back" aria-hidden="true">
+        <svg viewBox="0 0 11 18"><polyline points="10,1 1,9 10,17"/></svg>
+        <span>77</span>
+      </div>
+      <div class="nav-contact">
+        <img class="nav-avatar" src="assets/clover.png" alt="Clover">
+        <div class="nav-name">
+          Clover
+          <svg viewBox="0 0 10 10"><polyline points="2,3 5,7 8,3"/></svg>
+        </div>
+      </div>
+      <div class="nav-video" aria-hidden="true">
+        <svg viewBox="0 0 28 20"><path d="M2 3h16a2 2 0 012 2v10a2 2 0 01-2 2H2a2 2 0 01-2-2V5a2 2 0 012-2z"/><path d="M20 8l7-4v12l-7-4V8z"/></svg>
+      </div>
+    </div>
+
+    <div class="messages-area" id="messagesArea" aria-live="polite" aria-label="Conversation with Clover">
+      <div class="date-sep" id="dateSep">Today 9:41 AM</div>
+    </div>
+
+    <form class="input-bar" id="chatForm">
+      <div class="input-app-btn" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
+      </div>
+      <div class="input-wrap">
+        <textarea class="input-field" id="inputField" placeholder="iMessage" rows="1" autocomplete="off"></textarea>
+        <button class="send-btn" id="sendBtn" type="submit" aria-label="Send message">
+          <svg viewBox="0 0 16 16"><path d="M8 13V3M3 8l5-5 5 5"/></svg>
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  const messagesArea = document.getElementById("messagesArea");
+  const inputField = document.getElementById("inputField");
+  const sendBtn = document.getElementById("sendBtn");
+  const chatForm = document.getElementById("chatForm");
+  const statusTime = document.getElementById("statusTime");
+  const dateSep = document.getElementById("dateSep");
+
+  const moodPrompts = {
+    weather: "How are you feeling today?\n\n• ☀️ Sunny - Very positive mood\n• 🌤️ Partly Sunny - Kind of positive mood\n• 🏞️ Clear Skies - Neutral\n• 🌧️ Rainy - Kind of negative mood\n• ⛈️ Stormy️ - Very negative mood",
+    battery: "How are you feeling today?\n\n• ⚡Fully Charged - Positive mood\n• 🔋◼️Almost Charged - Kind of positive mood\n• 🔋◻️Half Charged - Neutral\n• 🔋Low Battery - Kind of negative mood\n• 🪫Completely Drained - Negative mood",
+    music: "How are you feeling today?\n\n• 🎶 Vibing - Positive mood\n• 🎧 Good playlist - Kind of positive mood\n• 🔉 Background noise - Neutral mood\n• 🔊 Off-key / noisy - Kind of negative mood\n• 🔇 Overwhelming noise - Negative mood"
+  };
+
+  const moodResponses = {
+    positive: [
+      "That's so good to hear. You deserve days that feel this way. 💛",
+      "You're doing really well. Keep going, you've got this.",
+      "Good days are worth celebrating, even the small ones. 🌟",
+      "Whatever you did to get here, it's working. YAY! 💛"
+    ],
+    neutral: [
+      "You’re maintaining, and maintenance is part of progress.",
+      "There’s no pressure for today to be anything more than it is.",
+      "This kind of day gives everything else room to breathe.",
+      "You’re keeping things balanced, even if it doesn’t feel notable."
+    ],
+    negative: [
+      "We're really glad you're here today. Even on the tough days — especially on the tough days. 💛",
+      "You’re allowed to have tough days without judging yourself for them. 🌿",
+      "Thank you for being honest about how you're feeling. That takes courage. 💙",
+      "Low days don't last forever, even when it feels like they will. You've gotten through hard days before. 💛",
+      "Whatever you're carrying right now, you don't have to carry it perfectly. Just take it one moment at a time. 🌿",
+      "I’m really glad you checked in, especially on a hard day."
+    ]
+  };
+
+  const scenarios = [
+    {
+      id: "otter-obstacle",
+      opening: "otter",
+      moodPrompt: "weather",
+      intervention: "obstacle",
+      challenge: "Daily challenge: Step outside for 5 minutes. Feel the air. Notice what's around you. If you feel like it, you could go on a walk 🚶‍♀️‍➡️"
+    },
+    {
+      id: "ants-future",
+      opening: "ants",
+      moodPrompt: "battery",
+      intervention: "future",
+      challenge: "Your challenge today: Try something new – it could be food, a coffee shop or restaurant, an activity. 🎉"
+    },
+    {
+      id: "instagram-pleasure",
+      opening: "instagram",
+      moodPrompt: "music",
+      intervention: "pleasure",
+      challenge: "Your challenge today: Put on a song you love and do nothing else for 3 minutes. Just listen. (Or dance if that’s the vibe 🕺)"
+    }
+  ];
+
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const randomChoice = (items) => items[Math.floor(Math.random() * items.length)];
+
+  const state = {
+    phase: "starting",
+    busy: false,
+    alternateStarted: false,
+    completed: false,
+    scenario: randomChoice(scenarios)
+  };
+
+  function scrollToBottom() {
+    setTimeout(() => {
+      messagesArea.scrollTop = messagesArea.scrollHeight;
+    }, 40);
+  }
+
+  function updateStatusTime() {
+    const now = new Date();
+    const statusBarTime = new Intl.DateTimeFormat("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZone: "America/Los_Angeles"
+    }).format(now).replace(/\s?[AP]M$/, "");
+    const conversationTime = new Intl.DateTimeFormat("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZone: "America/Los_Angeles"
+    }).format(now);
+
+    statusTime.textContent = statusBarTime;
+    dateSep.textContent = `Today ${conversationTime}`;
+  }
+
+  function escapeHtml(str) {
+    return str
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  function addTypingIndicator() {
+    const row = document.createElement("div");
+    row.className = "message-row received";
+    row.innerHTML = `
+      <div class="typing-bubble">
+        <div class="typing-dot"></div>
+        <div class="typing-dot"></div>
+        <div class="typing-dot"></div>
+      </div>
+    `;
+    messagesArea.appendChild(row);
+    scrollToBottom();
+    return row;
+  }
+
+  function addMessage(text, side) {
+    const row = document.createElement("div");
+    row.className = `message-row ${side === "sent" ? "sent" : "received"}`;
+    row.innerHTML = `<div class="bubble ${side === "sent" ? "sent" : "received"}">${escapeHtml(text)}</div>`;
+    messagesArea.appendChild(row);
+    scrollToBottom();
+  }
+
+  function updateInputState(enabled) {
+    inputField.disabled = !enabled;
+    sendBtn.disabled = !enabled;
+    sendBtn.classList.toggle("active", enabled && inputField.value.trim().length > 0);
+  }
+
+  function autosizeInput() {
+    inputField.style.height = "auto";
+    inputField.style.height = Math.min(inputField.scrollHeight, 80) + "px";
+    sendBtn.classList.toggle("active", !inputField.disabled && inputField.value.trim().length > 0);
+  }
+
+  async function cloverSays(text, options = {}) {
+    state.busy = true;
+    updateInputState(false);
+
+    const typing = addTypingIndicator();
+    await wait(options.typingMs ?? 1500);
+    typing.remove();
+    addMessage(text, "received");
+
+    await wait(options.afterMs ?? 0);
+    state.busy = false;
+    updateInputState(!state.completed);
+    inputField.focus();
+  }
+
+  async function cloverSequence(items) {
+    for (const item of items) {
+      if (typeof item === "string") {
+        await cloverSays(item);
+      } else {
+        await cloverSays(item.text, item);
+      }
+    }
+  }
+
+  function wantsDifferentQuestion(text) {
+    const normalized = text.toLowerCase();
+    return [
+      "don't want",
+      "do not want",
+      "dont want",
+      "not in the mood",
+      "rather not",
+      "skip",
+      "switch",
+      "different question",
+      "something else",
+      "another question",
+      "not talk about",
+      "no rough",
+      "rough patches",
+      "uncomfortable"
+    ].some((cue) => normalized.includes(cue));
+  }
+
+  function classifyMood(text) {
+    const normalized = text.toLowerCase();
+    const positive = ["sunny", "partly", "fully", "charged", "almost", "positive", "good", "great", "happy", "excited", "hopeful", "better", "well", "vibing", "playlist", "🎶", "🎧"];
+    const negative = ["rain", "storm", "low", "drained", "negative", "bad", "sad", "tired", "hard", "awful", "anxious", "stressed", "not good", "off-key", "noisy", "overwhelming", "🔊", "🔇"];
+    const neutral = ["clear", "neutral", "half", "ok", "okay", "fine", "normal", "middle", "background", "🔉"];
+
+    if (negative.some((cue) => normalized.includes(cue))) return "negative";
+    if (positive.some((cue) => normalized.includes(cue))) return "positive";
+    if (neutral.some((cue) => normalized.includes(cue))) return "neutral";
+    return "neutral";
+  }
+
+  async function startConversation() {
+    updateInputState(false);
+    await wait(600);
+
+    if (state.scenario.opening === "otter") {
+      state.phase = "introOtter";
+      await cloverSays("🤔 Quick question before we start… How do otters sleep without drifting away from each other?\n\nA) They tie their tails together\nB) They hold hands\nC) They sleep on land\nD) They don't sleep, ever");
+      updateInputState(true);
+      return;
+    }
+
+    if (state.scenario.opening === "ants") {
+      await cloverSays("Fun fact: Ants can carry 50x their body weight. Some days, just getting through is your ant moment. Tiny but mighty. 🐜", { afterMs: 2500 });
+      await askMood();
+      return;
+    }
+
+    state.phase = "introInstagram";
+    await cloverSays("🤔 Which of these was a real rejected name for the app we now call Instagram?\n\nA) Picster\nB) Scotch\nC) Snapgram\nD) Photobox");
+    updateInputState(true);
+  }
+
+  async function askMood() {
+    state.phase = "mood";
+    await cloverSays(moodPrompts[state.scenario.moodPrompt]);
+  }
+
+  async function sendMoodResponse(text) {
+    const mood = classifyMood(text);
+    await cloverSays(randomChoice(moodResponses[mood]), { afterMs: 900 });
+    await beginIntervention();
+  }
+
+  async function beginIntervention() {
+    if (state.scenario.intervention === "obstacle") {
+      state.phase = "keepGoing";
+      await cloverSays("Hey! Let’s think about an obstacle that’s helped you grow— could be physical, emotional, or just a rough patch in life.");
+      await cloverSays("What did you tell yourself to keep going?", { typingMs: 5000 });
+      return;
+    }
+
+    if (state.scenario.intervention === "future") {
+      state.phase = "futureImpact";
+      await cloverSays("When you think about your future, what do you hope people will remember about you?\nSome examples could be your humor, kindness, strength, or how you made others feel.");
+      return;
+    }
+
+    state.phase = "pleasureSpot";
+    await cloverSays("Look around — spot 3 things that make you feel good right now. Big or small counts.");
+  }
+
+  async function beginAlternatePath() {
+    state.alternateStarted = true;
+    state.phase = "altExcited";
+    await cloverSequence([
+      "If you're not in the mood to talk about rough patches today, we can talk about something else.",
+      "What’s one thing that you’re excited about right now?"
+    ]);
+  }
+
+  async function finishConversation(options = {}) {
+    state.phase = "done";
+    if (options.moment) {
+      await cloverSays("🎉 That was a whole little moment. You did that.", { afterMs: 2400 });
+    }
+    await cloverSays(state.scenario.challenge);
+    state.completed = true;
+    updateInputState(true);
+  }
+
+  function canSwitchToAlternate(text) {
+    return state.scenario.intervention === "obstacle" &&
+      ["obstacle", "keepGoing", "grateful", "support"].includes(state.phase) &&
+      !state.alternateStarted &&
+      !state.completed &&
+      wantsDifferentQuestion(text);
+  }
+
+  async function handleParticipantReply(text) {
+    if (canSwitchToAlternate(text)) {
+      await beginAlternatePath();
+      return;
+    }
+
+    switch (state.phase) {
+      case "introFun":
+        await askMood();
+        break;
+
+      case "introOtter":
+        await cloverSays("B! Otters hold hands while sleeping so they don't float apart. Isn’t that pretty cute! 🦦", { afterMs: 900 });
+        await askMood();
+        break;
+
+      case "introInstagram":
+        await cloverSays("B! Instagram was almost called Scotch. Imagine saying \"did you see it on Scotch.\" No thank you 🙂‍↔️", { afterMs: 900 });
+        await askMood();
+        break;
+
+      case "mood":
+        await sendMoodResponse(text);
+        break;
+
+      case "obstacle":
+        break;
+
+      case "keepGoing":
+        state.phase = "grateful";
+        await cloverSays("Name someone you’re grateful for who helped you feel brave or supported during a hard moment.");
+        break;
+
+      case "grateful":
+        state.phase = "support";
+        await cloverSays("How did they help you?");
+        break;
+
+      case "support":
+        await cloverSays("✨ Recognizing the people who support you is a powerful reminder that we’re not alone.", { afterMs: 1100 });
+        await finishConversation({ moment: true });
+        break;
+
+      case "futureImpact":
+        await cloverSays("✨ Taking a moment to reflect on the impact you want to make on others highlights the way your presence makes a positive difference.", { afterMs: 1100 });
+        await cloverSays("👑 Crowned yourself CEO of self-care today.", { afterMs: 1400 });
+        await cloverSays(state.scenario.challenge);
+        state.phase = "done";
+        state.completed = true;
+        updateInputState(true);
+        break;
+
+      case "pleasureSpot":
+        state.phase = "pleasureDetail";
+        await cloverSays("What about each thing makes it pleasurable?");
+        break;
+
+      case "pleasureDetail":
+        await cloverSays("✨Thanks for taking a moment to notice things that bring you joy. Pausing to pay attention helps those good feelings grow.", { afterMs: 1100 });
+        await cloverSays("🍪 You deserve a little treat. That reflection was solid work.", { afterMs: 1400 });
+        await cloverSays(state.scenario.challenge);
+        state.phase = "done";
+        state.completed = true;
+        updateInputState(true);
+        break;
+
+      case "altExcited":
+        state.phase = "altEmotion";
+        await cloverSays("Notice what emotions come up.", { afterMs: 5000 });
+        await cloverSays("What positive emotions show up for you?", { typingMs: 1800 });
+        break;
+
+      case "altEmotion":
+        await cloverSays("✨ Pausing to imagine and feel the good vibes is a great way to savor the moment.", { afterMs: 1100 });
+        await finishConversation({ moment: true });
+        break;
+    }
+  }
+
+  chatForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (state.busy) return;
+
+    const text = inputField.value.trim();
+    if (!text) return;
+
+    addMessage(text, "sent");
+    inputField.value = "";
+    autosizeInput();
+
+    if (state.completed) {
+      updateInputState(true);
+      return;
+    }
+
+    updateInputState(false);
+    await handleParticipantReply(text);
+  });
+
+  inputField.addEventListener("input", autosizeInput);
+
+  inputField.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      chatForm.requestSubmit();
+    }
+  });
+
+  updateStatusTime();
+  setInterval(updateStatusTime, 30000);
+  autosizeInput();
+  startConversation();
+</script>
+</body>
+</html>
