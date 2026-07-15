@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Clover — Live Monitor</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    background: #f2f2f7;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    background: #fff;
+    border-bottom: 1px solid #e0e0e4;
+    padding: 12px 18px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+  header h1 { font-size: 16px; margin-right: 10px; }
+  header input[type="text"] {
+    border: 1px solid #d1d1d6;
+    border-radius: 8px;
+    padding: 7px 10px;
+    font-size: 13px;
+    font-family: inherit;
+  }
+  #logUrl { flex: 1; min-width: 260px; }
+  #seedFilter { width: 130px; }
+  header button {
+    border: none;
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    background: #ececf0;
+  }
+  header button.primary { background: #0b84ff; color: #fff; }
+  #status { font-size: 12.5px; color: #666; width: 100%; }
+  #status.err { color: #c62828; }
+  #status.ok { color: #1a8f3c; }
+
+  #feed {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    max-width: 860px;
+    width: 100%;
+    margin: 0 auto;
+  }
+  .meta-row {
+    text-align: center;
+    font-size: 11.5px;
+    color: #8e8e93;
+    font-weight: 600;
+    padding: 12px 0 6px;
+    letter-spacing: 0.3px;
+  }
+  .row { display: flex; margin: 3px 0; }
+  .row.participant { justify-content: flex-end; }
+  .msg {
+    max-width: 72%;
+    padding: 8px 13px;
+    border-radius: 16px;
+    font-size: 14.5px;
+    line-height: 1.35;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .row.clover .msg { background: #e9e9eb; color: #000; border-bottom-left-radius: 5px; }
+  .row.participant .msg { background: #0b84ff; color: #fff; border-bottom-right-radius: 5px; }
+  .msg .tag {
+    display: block;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    opacity: 0.6;
+    margin-bottom: 2px;
+  }
+  .msg.gemini { border: 1.5px dashed #7a5af5; background: #f1edff; }
+  .msg.event { background: #fff8dc; border: 1px solid #eadfa2; font-size: 12.5px; color: #6b5d1e; }
+  .time { font-size: 10px; color: #999; align-self: flex-end; margin: 0 6px; }
+  footer {
+    background: #fff;
+    border-top: 1px solid #e0e0e4;
+    padding: 8px 18px;
+    font-size: 12px;
+    color: #777;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>🍀 Clover Live Monitor</h1>
+  <input type="text" id="logUrl" placeholder="Apps Script web app URL (https://script.google.com/macros/s/.../exec)">
+  <input type="text" id="seedFilter" placeholder="seed (optional)">
+  <button class="primary" id="startBtn">Start watching</button>
+  <button id="exportJson">Export JSON</button>
+  <button id="exportCsv">Export CSV</button>
+  <button id="clearBtn">Clear view</button>
+  <div id="status">Paste the Apps Script URL (same one as in the week pages' ⚙️ panel) and press Start. New messages appear within ~2 seconds. The Google Sheet behind the URL is the permanent log.</div>
+</header>
+
+<div id="feed"></div>
+
+<footer>Read-only view — polls the Google Sheet log every 2 s. Leave this tab open during the interview.</footer>
+
+<script>
+(function () {
+  const feed = document.getElementById("feed");
+  const statusEl = document.getElementById("status");
+  const urlInput = document.getElementById("logUrl");
+  const seedInput = document.getElementById("seedFilter");
+
+  urlInput.value = localStorage.getItem("clover-monitor-url") || "";
+  seedInput.value = localStorage.getItem("clover-monitor-seed") || "";
+
+  let lastRow = 1;
+  let timer = null;
+  let all = [];
+  let lastMarker = "";
+
+  function setStatus(msg, cls) {
+    statusEl.textContent = msg;
+    statusEl.className = cls || "";
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function render(entry) {
+    const marker = "Week " + entry.week + " · Day " + entry.day;
+    if (marker !== lastMarker) {
+      lastMarker = marker;
+      const m = document.createElement("div");
+      m.className = "meta-row";
+      m.textContent = marker + (entry.seed ? "  ·  seed " + entry.seed : "");
+      feed.appendChild(m);
+    }
+    const isEvent = /^\[(GEMINI|MOOD|INTERVENTION|SWAPPED|BADGE|TAPBACK)/.test(entry.text) === false ? false : true;
+    const isGemini = entry.text.startsWith("[GEMINI] ");
+    const row = document.createElement("div");
+    row.className = "row " + (entry.who === "participant" ? "participant" : "clover");
+    const time = new Date(entry.t);
+    const hh = isNaN(time) ? "" : time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    let text = entry.text;
+    let cls = "msg";
+    let tag = entry.phase || "";
+    if (isGemini) { text = text.slice(9); cls += " gemini"; tag = "Gemini · " + tag; }
+    else if (isEvent) { cls += " event"; }
+    const bubble = '<div class="' + cls + '"><span class="tag">' + esc(tag) + "</span>" + esc(text) + "</div>";
+    row.innerHTML = entry.who === "participant"
+      ? '<span class="time">' + hh + "</span>" + bubble
+      : bubble + '<span class="time">' + hh + "</span>";
+    feed.appendChild(row);
+    feed.scrollTop = feed.scrollHeight;
+  }
+
+  async function poll() {
+    const base = urlInput.value.trim();
+    if (!base) return;
+    const seed = seedInput.value.trim();
+    const url = base + (base.includes("?") ? "&" : "?") + "after=" + lastRow + (seed ? "&seed=" + encodeURIComponent(seed) : "");
+    try {
+      const res = await fetch(url);
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "endpoint error");
+      data.rows.forEach((r) => { all.push(r); render(r); });
+      lastRow = data.last;
+      setStatus("Watching… " + all.length + " messages · last checked " + new Date().toLocaleTimeString(), "ok");
+    } catch (e) {
+      setStatus("⚠️ Could not read log: " + e.message + " — check the URL (must end in /exec) and that the deployment allows 'Anyone'.", "err");
+    }
+  }
+
+  document.getElementById("startBtn").addEventListener("click", () => {
+    localStorage.setItem("clover-monitor-url", urlInput.value.trim());
+    localStorage.setItem("clover-monitor-seed", seedInput.value.trim());
+    if (timer) clearInterval(timer);
+    lastRow = 1; all = []; lastMarker = "";
+    feed.innerHTML = "";
+    poll();
+    timer = setInterval(poll, 2000);
+  });
+
+  document.getElementById("clearBtn").addEventListener("click", () => {
+    feed.innerHTML = "";
+    lastMarker = "";
+  });
+
+  function download(name, mime, content) {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([content], { type: mime }));
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  document.getElementById("exportJson").addEventListener("click", () => {
+    download("clover-log-" + Date.now() + ".json", "application/json", JSON.stringify(all, null, 2));
+  });
+
+  document.getElementById("exportCsv").addEventListener("click", () => {
+    const q = (s) => '"' + String(s).replaceAll('"', '""') + '"';
+    const lines = ["ts,seed,week,day,phase,who,text"];
+    all.forEach((r) => lines.push([r.t, r.seed, r.week, r.day, r.phase, r.who, r.text].map(q).join(",")));
+    download("clover-log-" + Date.now() + ".csv", "text/csv", lines.join("\n"));
+  });
+})();
+</script>
+</body>
+</html>

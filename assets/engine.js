@@ -73,7 +73,7 @@
 
   let config = loadJSON(CONFIG_KEY, {
     token: "", project: "", location: "us-central1",
-    model: "gemini-2.5-flash", offline: false
+    model: "gemini-2.5-flash", offline: false, logUrl: ""
   });
 
   function saveConfig() { localStorage.setItem(CONFIG_KEY, JSON.stringify(config)); }
@@ -196,8 +196,38 @@
   let transcript = loadJSON(transcriptKey, []);
 
   function log(who, text, phase) {
-    transcript.push({ t: new Date().toISOString(), week: WEEK, day: state.dayNum, phase: phase || state.phase, who, text });
+    const entry = { t: new Date().toISOString(), seed: settings.seed, week: WEEK, day: state.dayNum, phase: phase || state.phase, who, text };
+    transcript.push(entry);
     localStorage.setItem(transcriptKey, JSON.stringify(transcript));
+    remoteLog(entry);
+  }
+
+  /* Remote live log (Google Apps Script -> Google Sheet).
+     Fire-and-forget queue that preserves message order. */
+  const remoteQueue = [];
+  let remotePumping = false;
+
+  function remoteLog(entry) {
+    if (!config.logUrl) return;
+    remoteQueue.push(entry);
+    pumpRemoteQueue();
+  }
+
+  async function pumpRemoteQueue() {
+    if (remotePumping) return;
+    remotePumping = true;
+    while (remoteQueue.length) {
+      const entry = remoteQueue.shift();
+      try {
+        // text/plain body avoids a CORS preflight, which Apps Script
+        // web apps do not answer.
+        await fetch(config.logUrl, { method: "POST", body: JSON.stringify(entry) });
+      } catch (e) {
+        console.warn("remote log failed:", e);
+        setGearStatus("⚠️ Live log unreachable (messages still saved locally)");
+      }
+    }
+    remotePumping = false;
   }
 
   function downloadTranscript() {
@@ -254,7 +284,11 @@ Rules:
         signal: controller.signal
       });
       clearTimeout(timer);
-      if (!res.ok) throw new Error("HTTP " + res.status);
+      if (!res.ok) {
+        let detail = "";
+        try { detail = (await res.json()).error?.message || ""; } catch (e) {}
+        throw new Error("HTTP " + res.status + (detail ? " — " + detail.slice(0, 200) : ""));
+      }
       const data = await res.json();
       const text = data.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("").trim();
       if (!text) throw new Error("empty response");
@@ -262,10 +296,13 @@ Rules:
       return text;
     } catch (e) {
       console.warn("Gemini call failed, using fallback:", e);
+      lastGeminiError = e.message || String(e);
       setGearStatus("⚠️ Gemini unavailable — using fallback replies");
       return fallbackReflection();
     }
   }
+
+  let lastGeminiError = "";
 
   let fbIdx = Math.floor(Math.random() * C.fallbackReflections.length);
   function fallbackReflection() {
@@ -782,6 +819,7 @@ Rules:
     document.getElementById("cfgModel").value = config.model;
     document.getElementById("cfgOffline").checked = config.offline;
     document.getElementById("cfgSeed").value = settings.seed;
+    document.getElementById("cfgLogUrl").value = config.logUrl || "";
     statusEl.textContent = "";
     statusEl.className = "setup-status";
     overlay.classList.add("open");
@@ -793,6 +831,7 @@ Rules:
     config.location = document.getElementById("cfgLocation").value.trim() || "us-central1";
     config.model = document.getElementById("cfgModel").value.trim() || "gemini-2.5-flash";
     config.offline = document.getElementById("cfgOffline").checked;
+    config.logUrl = document.getElementById("cfgLogUrl").value.trim();
     const newSeed = document.getElementById("cfgSeed").value.trim();
     if (newSeed && newSeed !== settings.seed) {
       settings.seed = newSeed;
@@ -814,7 +853,12 @@ Rules:
     statusEl.className = "setup-status";
     const r = await testGemini();
     if (C.fallbackReflections.includes(r)) {
-      statusEl.textContent = "❌ Could not reach Gemini. Check the token (expires after ~1 hour), project ID, and location.";
+      let hint = "";
+      if (/401/.test(lastGeminiError)) hint = " → Token is missing, expired, or invalid. Generate a fresh one.";
+      else if (/403/.test(lastGeminiError)) hint = " → Token works but no access: wrong project ID, Vertex AI API not enabled, or your account lacks permission.";
+      else if (/404/.test(lastGeminiError)) hint = " → Wrong project ID, location, or model name.";
+      else if (/Failed to fetch|abort/i.test(lastGeminiError)) hint = " → Network/CORS issue or no internet.";
+      statusEl.textContent = "❌ " + (lastGeminiError || "Could not reach Gemini.") + hint;
       statusEl.className = "setup-status err";
     } else {
       statusEl.textContent = "✅ Gemini responded: \"" + r + "\"";
