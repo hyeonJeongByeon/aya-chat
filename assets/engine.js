@@ -89,6 +89,12 @@
 
   function saveConfig() { localStorage.setItem(CONFIG_KEY, JSON.stringify(config)); }
 
+  // Backend URL resolution for participants who arrive with a clean
+  // browser: ?log=... beats the panel-saved value, which beats the
+  // site-wide default baked into assets/site-config.js.
+  if (urlParams.get("log")) config.logUrl = urlParams.get("log");
+  else if (!config.logUrl && window.CLOVER_DEFAULT_LOG_URL) config.logUrl = window.CLOVER_DEFAULT_LOG_URL;
+
   /* ================= Schedule builder =================
      Partitions the whole bank across 28 days so any two weeks are
      mutually exclusive for the same seed.
@@ -266,7 +272,36 @@ Rules:
 - If the participant expresses thoughts of self-harm, suicide, or serious crisis, drop the format: respond with warmth, tell them their feelings matter, and encourage them to reach out right away to their care team or call/text 988 (Suicide & Crisis Lifeline).`;
 
   async function geminiReflect(question, answer) {
-    if (config.offline || !config.token || !config.project) return fallbackReflection();
+    if (config.offline) return fallbackReflection();
+
+    // Preferred path: the Apps Script backend proxies Vertex AI with the
+    // researcher's own auto-refreshed credentials, so a shared link works
+    // whenever a participant opens it — no 1-hour token involved.
+    if (config.logUrl) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 25000);
+        const res = await fetch(config.logUrl, {
+          method: "POST",
+          body: JSON.stringify({ action: "gemini", question, answer }),
+          signal: controller.signal
+        });
+        clearTimeout(timer);
+        const data = await res.json();
+        if (data.ok && data.text) { setGearStatus(""); return data.text.trim(); }
+        throw new Error(data.error || "proxy error");
+      } catch (e) {
+        console.warn("Gemini proxy failed:", e);
+        lastGeminiError = e.message || String(e);
+        // fall through to the direct-token path if one is configured
+      }
+    }
+
+    if (!config.token || !config.project) {
+      if (!config.logUrl) lastGeminiError = "No Apps Script URL and no token configured";
+      setGearStatus("⚠️ Gemini unavailable — using fallback replies");
+      return fallbackReflection();
+    }
 
     const url = "https://" + config.location + "-aiplatform.googleapis.com/v1/projects/" +
       encodeURIComponent(config.project) + "/locations/" + config.location +
@@ -946,10 +981,11 @@ Rules:
     const r = await testGemini();
     if (C.fallbackReflections.includes(r)) {
       let hint = "";
-      if (/401/.test(lastGeminiError)) hint = " → Token is missing, expired, or invalid. Generate a fresh one.";
-      else if (/403/.test(lastGeminiError)) hint = " → Token works but no access: wrong project ID, Vertex AI API not enabled, or your account lacks permission.";
+      if (/PROJECT_ID not set/.test(lastGeminiError)) hint = " → Open the Apps Script editor and fill in PROJECT_ID in Code.gs, then redeploy (Manage deployments → edit → New version).";
+      else if (/401/.test(lastGeminiError)) hint = " → Credentials rejected. Apps Script route: re-authorize the script (run testGemini in the editor). Token route: generate a fresh token.";
+      else if (/403/.test(lastGeminiError)) hint = " → No access: wrong project ID, Vertex AI API not enabled, missing cloud-platform scope in appsscript.json, or the account lacks permission.";
       else if (/404/.test(lastGeminiError)) hint = " → Wrong project ID, location, or model name.";
-      else if (/Failed to fetch|abort/i.test(lastGeminiError)) hint = " → Network/CORS issue or no internet.";
+      else if (/Failed to fetch|abort/i.test(lastGeminiError)) hint = " → Could not reach the endpoint: check the Apps Script URL ends in /exec and the deployment allows 'Anyone'.";
       statusEl.textContent = "❌ " + (lastGeminiError || "Could not reach Gemini.") + hint;
       statusEl.className = "setup-status err";
     } else {

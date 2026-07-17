@@ -66,11 +66,13 @@
 <div class="setup-overlay" id="setupOverlay">
   <div class="setup-panel">
     <h2>Researcher setup — <span id="weekBadge">Sample</span></h2>
-    <p class="sub">Participants never need this panel. Paste a fresh Vertex AI access token before each interview (tokens expire after ~1 hour):<br>
-    <code>gcloud auth login</code> with your Seattle Children's account, then <code>gcloud auth print-access-token</code></p>
+    <p class="sub">Participants never need this panel. <b>Recommended:</b> set the Apps Script URL below — it powers both the AI replies and the live log with your Google account's own credentials, so the shared link works anytime with no tokens. Setup instructions are at the top of <code>apps-script/Code.gs</code>.</p>
 
-    <label for="cfgToken">Access token</label>
-    <textarea id="cfgToken" placeholder="ya29...."></textarea>
+    <label for="cfgLogUrl">Apps Script URL (AI + live log)</label>
+    <input type="text" id="cfgLogUrl" placeholder="https://script.google.com/macros/s/.../exec">
+
+    <label for="cfgToken">Access token (optional fallback — expires after ~1 hour, for local testing only)</label>
+    <textarea id="cfgToken" placeholder="ya29.... (leave empty when using the Apps Script URL)"></textarea>
 
     <div class="setup-row">
       <div>
@@ -94,9 +96,6 @@
       </div>
     </div>
 
-    <label for="cfgLogUrl">Live log URL (Apps Script web app — see apps-script/Code.gs)</label>
-    <input type="text" id="cfgLogUrl" placeholder="https://script.google.com/macros/s/.../exec">
-
     <div class="setup-check">
       <input type="checkbox" id="cfgOffline">
       <label for="cfgOffline" style="margin:0">Offline mode (scripted fallback replies, no Gemini)</label>
@@ -115,6 +114,7 @@
 </div>
 
 <script>window.CLOVER_WEEK = 1; window.CLOVER_DEMO = true;</script>
+<script src="assets/site-config.js"></script>
 <script src="assets/content.js"></script>
 <script src="assets/engine.js"></script>
 </body>
