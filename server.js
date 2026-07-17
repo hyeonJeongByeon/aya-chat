@@ -34,9 +34,38 @@ Rules:
 
 const auth = new GoogleAuth({ scopes: "https://www.googleapis.com/auth/cloud-platform" });
 
+/* Credentials: on Cloud Run, ambient service credentials via GoogleAuth.
+   On a laptop, fall back to the gcloud CLI's logged-in account
+   (token cached ~45 min, auto-refreshed). */
+const { execFileSync } = require("child_process");
+let cliToken = null, cliTokenTime = 0;
+
+function gcloudToken() {
+  if (cliToken && Date.now() - cliTokenTime < 45 * 60 * 1000) return cliToken;
+  const gcloudPath = process.env.GCLOUD_BIN || "gcloud";
+  cliToken = execFileSync(gcloudPath, ["auth", "print-access-token"], { encoding: "utf8" }).trim();
+  cliTokenTime = Date.now();
+  return cliToken;
+}
+
+async function getAccessToken() {
+  try {
+    const client = await auth.getClient();
+    const t = await client.getAccessToken();
+    if (t && t.token) return t.token;
+    throw new Error("no ADC token");
+  } catch (e) {
+    return gcloudToken();
+  }
+}
+
 async function geminiReflect(question, answer) {
-  const client = await auth.getClient();
-  const project = PROJECT || (await auth.getProjectId());
+  const token = await getAccessToken();
+  let project = PROJECT;
+  if (!project) {
+    try { project = await auth.getProjectId(); } catch (e) { project = ""; }
+  }
+  if (!project) throw new Error("set GCP_PROJECT env var");
   const url = `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${project}/locations/${LOCATION}/publishers/google/models/${MODEL}:generateContent`;
   const body = {
     systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
@@ -48,8 +77,14 @@ async function geminiReflect(question, answer) {
     }],
     generationConfig: { temperature: 0.8, maxOutputTokens: 1024, thinkingConfig: { thinkingBudget: 0 } }
   };
-  const res = await client.request({ url, method: "POST", data: body });
-  const parts = res.data?.candidates?.[0]?.content?.parts || [];
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error("Vertex HTTP " + res.status + ": " + (await res.text()).slice(0, 200));
+  const data = await res.json();
+  const parts = data?.candidates?.[0]?.content?.parts || [];
   const text = parts.map((p) => p.text || "").join("").trim();
   if (!text) throw new Error("empty Vertex response");
   return text;
