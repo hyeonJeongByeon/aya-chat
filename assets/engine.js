@@ -1008,8 +1008,9 @@ Rules:
     location.reload();
   });
 
-  // Open setup automatically if Gemini isn't configured yet.
-  if (!config.token && !config.offline) {
+  // The setup panel never opens on its own for participants — only via
+  // the ⚙️ gear or a ?setup=1 URL (for the researcher).
+  if (urlParams.get("setup")) {
     setTimeout(openSetup, 400);
   }
 
