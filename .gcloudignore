@@ -1,0 +1,8 @@
+.git
+.claude
+.gitignore
+apps-script/
+aya-batch3-prototype.html
+index.html
+monitor.html
+node_modules/
