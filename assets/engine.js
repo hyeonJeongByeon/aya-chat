@@ -9,6 +9,16 @@
 (function () {
   const C = window.CLOVER_CONTENT;
   const WEEK = window.CLOVER_WEEK || 1;
+  // Demo/sample mode: onboarding runs on EVERY page load and the seed is
+  // re-randomized per session (unless ?seed= is given).
+  const DEMO = !!window.CLOVER_DEMO;
+
+  /* Voice audio (assets/audio). Two voices x two exercises. */
+  const AUDIO = {
+    preview: { ai: "assets/audio/ucla-ai.mp3", human: "assets/audio/ucla-human.mp3" },
+    mf: { ai: "assets/audio/ucla-ai.mp3", human: "assets/audio/ucla-human.mp3" },
+    mb: { ai: "assets/audio/mbsc-ai.mp3", human: "assets/audio/mbsc-human.mp3" }
+  };
 
   /* ================= Seeded RNG ================= */
   function hashStr(s) {
@@ -39,7 +49,7 @@
   }
 
   /* ================= Persistent settings ================= */
-  const SETTINGS_KEY = "clover-settings";
+  const SETTINGS_KEY = DEMO ? "clover-demo-settings" : "clover-settings";
   const CONFIG_KEY = "clover-config";
 
   function loadJSON(key, fallback) {
@@ -49,7 +59,8 @@
 
   const urlParams = new URLSearchParams(location.search);
 
-  let settings = loadJSON(SETTINGS_KEY, null);
+  // Demo mode always starts a fresh participant session.
+  let settings = DEMO ? null : loadJSON(SETTINGS_KEY, null);
   if (!settings) {
     settings = {
       seed: urlParams.get("seed") || String(Math.floor(Math.random() * 1e9)),
@@ -145,12 +156,12 @@
     for (let d = 0; d < 28; d++) {
       const week = Math.floor(d / 7);
       const cat = weekCats[week][d % 7];
-      let pair, isCancerDay = false;
+      let pair, isCancerDay = false, audio = null;
 
       if (cat === "sav") pair = savPairs[idx.sav++];
-      else if (cat === "gr") pair = grPairs[idx.gr++];
-      else if (cat === "mf") pair = mfPairs[idx.mf++];
-      else if (cat === "mb") pair = mbPairs[idx.mb++];
+      else if (cat === "gr") { pair = grPairs[idx.gr++]; }
+      else if (cat === "mf") { if (idx.mf === 0) audio = "mf"; pair = mfPairs[idx.mf++]; }
+      else if (cat === "mb") { if (idx.mb === 0) audio = "mb"; pair = mbPairs[idx.mb++]; }
       else {
         const mi = idx.mn++;
         if (settings.cancerOK) {
@@ -178,7 +189,7 @@
       days.push({
         day: d + 1,
         week: week + 1,
-        cat, isCancerDay,
+        cat, isCancerDay, audio,
         def, swap,
         funFact,
         badge: badges[d],
@@ -370,6 +381,19 @@ Rules:
     return row;
   }
 
+  function addAudioMessage(src, caption) {
+    const row = document.createElement("div");
+    row.className = "message-row received";
+    row.innerHTML = '<div class="bubble received audio-bubble">'
+      + (caption ? '<span class="audio-caption">' + escapeHtml(caption) + "</span>" : "")
+      + '<audio controls preload="metadata" src="' + src + '"></audio></div>';
+    messagesArea.appendChild(row);
+    state.lastCloverRow = row;
+    scrollToBottom();
+    log("clover", "[AUDIO] " + src);
+    return row;
+  }
+
   function addBadge(text) {
     const row = document.createElement("div");
     row.className = "message-row received";
@@ -542,6 +566,45 @@ Rules:
     return "done";
   }
 
+  /* Audio-guided exercise (first mindfulness day + first MBSC day).
+     Plays the participant's preferred voice; swapping falls back to the
+     scheduled text exercise for the same category. */
+  async function runAudioIntervention(dayInfo) {
+    const voice = settings.voice === "human" ? "human" : "ai";
+    const src = AUDIO[dayInfo.audio][voice];
+    const kind = dayInfo.audio === "mb" ? "self-compassion" : "mindfulness";
+    log("clover", "[INTERVENTION cat=" + dayInfo.cat + " AUDIO=" + src + "]");
+
+    await say("For today's exercise, one of Clover's friends is going to guide you through a short " + kind + " practice 🎧");
+    addAudioMessage(src, "Guided " + kind + " exercise");
+    await wait(600);
+    await say("Find a comfy spot, press ▶️, and follow along. Take all the time you need — I'll be right here.");
+    await say("If audio isn't your vibe today, we can do a text version instead — just say so or tap below.", { typingMs: 900 });
+
+    const reply = await waitForUser([
+      { label: "✅ I finished the exercise", value: "__done__" },
+      { label: "🔄 Swap to a text exercise", value: "__swap__" }
+    ]);
+
+    if (reply.text === "__swap__" || wantsSwap(reply.text)) {
+      await say("No problem at all! Let's try this one instead 😊", { typingMs: 900 });
+      log("clover", "[SWAPPED to text " + dayInfo.def.id + "]");
+      await runPrompt(dayInfo.def, false);
+      return;
+    }
+
+    await say("React with a 👍 if you're glad you showed up for yourself");
+    await waitForUser([
+      { label: "👍", reaction: true }, { label: "❤️", reaction: true }, { label: "🧘", reaction: true }
+    ]);
+    await wait(400);
+
+    // Close with the scripted sparkle line from the scheduled text prompt
+    // of the same category.
+    const closing = [...dayInfo.def.steps].reverse().find((s) => typeof s === "string" && s.startsWith("✨"));
+    await say(closing || "✨ Nice work taking this moment for yourself.");
+  }
+
   /* ================= Daily flow ================= */
   async function runDay(dayInfo, prevDay) {
     state.dayNum = dayInfo.day;
@@ -625,22 +688,28 @@ Rules:
 
     // 5. Intervention content (default, swappable within same category)
     state.phase = "intervention";
-    log("clover", "[INTERVENTION cat=" + dayInfo.cat + " default=" + dayInfo.def.id + "]");
-    const result = await runPrompt(dayInfo.def, true);
-    if (result === "swapped") {
-      await say("No problem at all! Let's try this one instead 😊", { typingMs: 900 });
-      log("clover", "[SWAPPED to " + dayInfo.swap.id + "]");
-      await runPrompt(dayInfo.swap, false);
+    if (dayInfo.audio) {
+      await runAudioIntervention(dayInfo);
+    } else {
+      log("clover", "[INTERVENTION cat=" + dayInfo.cat + " default=" + dayInfo.def.id + "]");
+      const result = await runPrompt(dayInfo.def, true);
+      if (result === "swapped") {
+        await say("No problem at all! Let's try this one instead 😊", { typingMs: 900 });
+        log("clover", "[SWAPPED to " + dayInfo.swap.id + "]");
+        await runPrompt(dayInfo.swap, false);
+      }
     }
 
     // 6. Affirmation
     state.phase = "affirmation";
     await say(dayInfo.affirmation, { typingMs: 1100 });
 
-    // 7. Badge
+    // 7. Badge + streak
     await wait(400);
     addBadge(dayInfo.badge);
     await wait(900);
+    const streak = dayInfo.day;
+    await say("🔥 Streak: " + streak + " day" + (streak > 1 ? "s" : "") + " in a row!", { typingMs: 700 });
 
     // 8. Behavioral activation challenge
     state.phase = "ba";
@@ -728,10 +797,31 @@ Rules:
     settings.deepDays = r.text;
     await say("Noted! 📝");
 
-    // Voice preference
-    await say("A couple of Clover's friends are going to help guide you through some mindfulness exercises later. Is there a voice you prefer?");
-    r = await waitForUser([{ label: "Voice 1 🎙️" }, { label: "Voice 2 🎙️" }, { label: "No preference" }]);
-    settings.voice = r.text;
+    // Voice preference — play a short snippet of each voice, then choose.
+    await say("A couple of Clover's friends are going to help guide you through some mindfulness exercises later.");
+    await say("Here's a little preview of each voice — tap ▶️ to listen, then pick the one you like best 🎧");
+
+    let previewAudio = null;
+    const playSnippet = (src) => {
+      if (previewAudio) previewAudio.pause();
+      previewAudio = new Audio(src);
+      previewAudio.play();
+      // 5-10 second snippet: stop the preview at 8 seconds.
+      previewAudio.addEventListener("timeupdate", function stopAt() {
+        if (this.currentTime >= 8) { this.pause(); this.removeEventListener("timeupdate", stopAt); }
+      });
+    };
+
+    r = await waitForUser([
+      { label: "▶️ Preview Voice 1", onTap: () => playSnippet(AUDIO.preview.ai) },
+      { label: "▶️ Preview Voice 2", onTap: () => playSnippet(AUDIO.preview.human) },
+      { label: "I like Voice 1 🎙️", value: "Voice 1" },
+      { label: "I like Voice 2 🎙️", value: "Voice 2" },
+      { label: "No preference", value: "No preference" }
+    ]);
+    if (previewAudio) previewAudio.pause();
+    settings.voice = /2/.test(r.text) ? "human" : "ai";
+    await say("Great choice! 🎧");
 
     settings.onboarded = true;
     saveSettings();
@@ -748,7 +838,7 @@ Rules:
     autosizeInput();
     updateInputState(false);
 
-    document.getElementById("weekBadge").textContent = "Week " + WEEK;
+    document.getElementById("weekBadge").textContent = DEMO ? "Sample (7 days)" : "Week " + WEEK;
 
     await wait(600);
 
@@ -799,8 +889,10 @@ Rules:
       }
     }
 
-    addSeparator("Week " + WEEK + " complete 🎉");
-    await say("That's a wrap on Week " + WEEK + "! Thank you so much for spending this time with me. 💛🍀");
+    addSeparator(DEMO ? "Sample complete 🎉" : "Week " + WEEK + " complete 🎉");
+    await say(DEMO
+      ? "That's the end of the sample! Thank you so much for spending this time with me. 💛🍀"
+      : "That's a wrap on Week " + WEEK + "! Thank you so much for spending this time with me. 💛🍀");
   }
 
   /* ================= Setup panel ================= */
