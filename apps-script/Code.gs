@@ -1,51 +1,41 @@
 /**
- * AYA-CHAT Clover — Apps Script backend
- * Does TWO jobs behind one URL, so the shared website needs no tokens:
- *   1. Persistent logging: every chat message -> a row in this spreadsheet.
- *   2. Gemini proxy: calls Vertex AI with YOUR Google account's credentials,
- *      which Google refreshes automatically — works whenever a participant
- *      opens the link, with no 1-hour token problem.
+ * AYA-CHAT Clover — backend (Google Apps Script, PERSONAL Google account)
+ * One URL, two jobs:
+ *   1. Chat log: every message -> a row in this spreadsheet (permanent log,
+ *      viewable live in the sheet or via monitor.html).
+ *   2. AI proxy: calls Gemini on Vertex AI using the STUDY SERVICE-ACCOUNT
+ *      key (from Secret Manager), so the shared links work anytime with no
+ *      tokens in the browser.
  *
- * SETUP (one time, ~10 minutes):
- *  1. sheets.google.com (Seattle Children's account) -> create a blank
- *     spreadsheet named e.g. "Clover Interview Logs".
- *  2. Extensions -> Apps Script. Delete the placeholder and paste this file.
- *  3. Fill in PROJECT_ID below with the real GCP project ID.
- *  4. Left sidebar: Project Settings (gear) -> check "Show appsscript.json
- *     manifest file". Back in the editor, open appsscript.json and replace
- *     its contents with:
+ * SETUP (~10 minutes, using a PERSONAL Google account since the
+ * organization account has Apps Script disabled):
  *
- *     {
- *       "timeZone": "America/Los_Angeles",
- *       "exceptionLogging": "STACKDRIVER",
- *       "runtimeVersion": "V8",
- *       "oauthScopes": [
- *         "https://www.googleapis.com/auth/spreadsheets",
- *         "https://www.googleapis.com/auth/script.external_request",
- *         "https://www.googleapis.com/auth/cloud-platform"
- *       ]
- *     }
+ *  1. sheets.google.com -> create a blank spreadsheet, e.g. "Clover Logs".
+ *  2. Extensions -> Apps Script -> delete the placeholder, paste this file.
+ *  3. Get the service-account JSON key (the one your IT manager shared via
+ *     Secret Manager). In the Apps Script editor: gear icon (Project
+ *     Settings) -> Script Properties -> Add script property:
+ *        Property: SA_KEY
+ *        Value:    <paste the ENTIRE JSON key, all of it>
+ *     (Script Properties keep the key out of the code itself.)
+ *  4. Deploy -> New deployment -> type: Web app.
+ *        Execute as: Me    |    Who has access: Anyone
+ *     Authorize when prompted, and copy the Web app URL (ends in /exec).
+ *  5. Paste that URL into the ⚙️ panel of the week pages (once per browser),
+ *     or better: put it in assets/site-config.js so every participant link
+ *     has it automatically.
+ *  6. Test: run testGemini from the editor toolbar (Run button) and check
+ *     the log output says ok:true.
  *
- *  5. Deploy -> New deployment -> type: Web app.
- *       Execute as: Me    |    Who has access: Anyone
- *     Authorize with your Seattle Children's account when prompted
- *     (that account must have Vertex AI access on the project).
- *  6. Copy the Web app URL (ends in /exec) and paste it into the
- *     "Apps Script URL" field in the ⚙️ panel of the site, and into
- *     monitor.html.
- *
- * To update this code later: paste changes, then Deploy -> Manage
- * deployments -> edit (pencil) -> Version: New version -> Deploy.
- * (Creating a brand-new deployment changes the URL; editing keeps it.)
+ * To update code later: Deploy -> Manage deployments -> pencil ->
+ * Version: New version -> Deploy (keeps the same URL).
  */
 
-/* ======== CONFIG — EDIT THIS ======== */
-var PROJECT_ID = "PASTE-YOUR-GCP-PROJECT-ID-HERE"; // exact ID, not display name
+/* ======== CONFIG ======== */
 var LOCATION = "us-central1";
 var MODEL = "gemini-2.5-flash";
-/* ==================================== */
-
 var SHEET_NAME = "log";
+/* ======================== */
 
 var SYSTEM_PROMPT = [
   "You are Clover, a warm and supportive wellbeing chatbot for teen and young adult cancer survivors (ages ~15-29).",
@@ -76,29 +66,24 @@ function getSheet_() {
   var sh = ss.getSheetByName(SHEET_NAME);
   if (!sh) sh = ss.insertSheet(SHEET_NAME);
   if (sh.getLastRow() === 0) {
-    sh.appendRow(["ts", "seed", "week", "day", "phase", "who", "text"]);
+    sh.appendRow(["ts", "participant", "week", "day", "phase", "who", "text"]);
   }
   return sh;
 }
 
 function doPost(e) {
   var d;
-  try {
-    d = JSON.parse(e.postData.contents);
-  } catch (err) {
-    return out_({ ok: false, error: "bad JSON" });
-  }
+  try { d = JSON.parse(e.postData.contents); }
+  catch (err) { return out_({ ok: false, error: "bad JSON" }); }
 
   if (d.action === "gemini") {
     return out_(geminiReflect_(String(d.question || ""), String(d.answer || "")));
   }
 
-  // Default action: append a log row.
   var lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
-    var sh = getSheet_();
-    sh.appendRow([
+    getSheet_().appendRow([
       String(d.t || new Date().toISOString()),
       String(d.seed || ""),
       Number(d.week || 0),
@@ -107,7 +92,7 @@ function doPost(e) {
       String(d.who || ""),
       String(d.text || "")
     ]);
-    return out_({ ok: true, row: sh.getLastRow() });
+    return out_({ ok: true });
   } catch (err) {
     return out_({ ok: false, error: String(err) });
   } finally {
@@ -115,44 +100,85 @@ function doPost(e) {
   }
 }
 
+/* ---- Service-account OAuth (JWT bearer flow), token cached ~50 min ---- */
+function saToken_() {
+  var cache = CacheService.getScriptCache();
+  var cached = cache.get("sa_token");
+  if (cached) return cached;
+
+  var raw = PropertiesService.getScriptProperties().getProperty("SA_KEY");
+  if (!raw) throw new Error("SA_KEY script property not set (paste the service-account JSON key)");
+  var key = JSON.parse(raw);
+
+  var now = Math.floor(Date.now() / 1000);
+  var header = Utilities.base64EncodeWebSafe(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  var claims = Utilities.base64EncodeWebSafe(JSON.stringify({
+    iss: key.client_email,
+    scope: "https://www.googleapis.com/auth/cloud-platform",
+    aud: "https://oauth2.googleapis.com/token",
+    iat: now,
+    exp: now + 3600
+  }));
+  var input = header + "." + claims;
+  var signature = Utilities.base64EncodeWebSafe(
+    Utilities.computeRsaSha256Signature(input, key.private_key)
+  );
+  var jwt = input + "." + signature;
+
+  var res = UrlFetchApp.fetch("https://oauth2.googleapis.com/token", {
+    method: "post",
+    payload: {
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: jwt
+    },
+    muteHttpExceptions: true
+  });
+  var data = JSON.parse(res.getContentText());
+  if (!data.access_token) throw new Error("token exchange failed: " + res.getContentText().slice(0, 200));
+  cache.put("sa_token", data.access_token, 3000);
+  return data.access_token;
+}
+
+function saProject_() {
+  var raw = PropertiesService.getScriptProperties().getProperty("SA_KEY");
+  return JSON.parse(raw).project_id;
+}
+
 function geminiReflect_(question, answer) {
-  if (PROJECT_ID.indexOf("PASTE-") === 0) {
-    return { ok: false, error: "PROJECT_ID not set in Apps Script Code.gs" };
-  }
-  var url = "https://" + LOCATION + "-aiplatform.googleapis.com/v1/projects/" +
-    PROJECT_ID + "/locations/" + LOCATION +
-    "/publishers/google/models/" + MODEL + ":generateContent";
-
-  var payload = {
-    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-    contents: [{
-      role: "user",
-      parts: [{
-        text: "Clover asked: \"" + question.slice(0, 1000) +
-          "\"\n\nParticipant answered: \"" + answer.slice(0, 2000) +
-          "\"\n\nWrite Clover's brief active-listening reflection."
-      }]
-    }],
-    generationConfig: {
-      temperature: 0.8,
-      maxOutputTokens: 1024,
-      thinkingConfig: { thinkingBudget: 0 }
-    }
-  };
-
   try {
+    var token = saToken_();
+    var project = saProject_();
+    var url = "https://" + LOCATION + "-aiplatform.googleapis.com/v1/projects/" +
+      project + "/locations/" + LOCATION +
+      "/publishers/google/models/" + MODEL + ":generateContent";
+
+    var payload = {
+      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+      contents: [{
+        role: "user",
+        parts: [{
+          text: "Clover asked: \"" + question.slice(0, 1000) +
+            "\"\n\nParticipant answered: \"" + answer.slice(0, 2000) +
+            "\"\n\nWrite Clover's brief active-listening reflection."
+        }]
+      }],
+      generationConfig: {
+        temperature: 0.8,
+        maxOutputTokens: 1024,
+        thinkingConfig: { thinkingBudget: 0 }
+      }
+    };
+
     var res = UrlFetchApp.fetch(url, {
       method: "post",
       contentType: "application/json",
-      headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+      headers: { Authorization: "Bearer " + token },
       payload: JSON.stringify(payload),
       muteHttpExceptions: true
     });
     var code = res.getResponseCode();
     var bodyText = res.getContentText();
-    if (code !== 200) {
-      return { ok: false, error: "Vertex HTTP " + code + ": " + bodyText.slice(0, 300) };
-    }
+    if (code !== 200) return { ok: false, error: "Vertex HTTP " + code + ": " + bodyText.slice(0, 300) };
     var data = JSON.parse(bodyText);
     var parts = (((data.candidates || [])[0] || {}).content || {}).parts || [];
     var text = parts.map(function (p) { return p.text || ""; }).join("").trim();
@@ -163,10 +189,7 @@ function geminiReflect_(question, answer) {
   }
 }
 
-/**
- * GET ?after=<rowNumber>&seed=<optional filter> — used by monitor.html.
- * Returns rows with row number > after (header is row 1).
- */
+/** GET ?after=<rowNumber>&seed=<participant filter> — used by monitor.html */
 function doGet(e) {
   var after = Math.max(1, Number((e.parameter && e.parameter.after) || 1));
   var seedFilter = (e.parameter && e.parameter.seed) || "";
@@ -188,7 +211,7 @@ function doGet(e) {
   return out_({ ok: true, last: last, rows: rows });
 }
 
-/** Run this from the editor (Run button) once to test your Vertex access. */
+/** Run from the editor once to verify Vertex access via the SA key. */
 function testGemini() {
   var r = geminiReflect_("How are you feeling today?", "Pretty good, I spent time with my dog.");
   Logger.log(JSON.stringify(r));
