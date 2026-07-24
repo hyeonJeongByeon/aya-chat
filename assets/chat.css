@@ -491,6 +491,26 @@ body {
   stroke-linejoin: round;
 }
 
+/* Restart button (team-testing page) */
+.restart-btn {
+  position: fixed;
+  top: 14px;
+  left: 14px;
+  border: none;
+  border-radius: 19px;
+  padding: 9px 16px;
+  background: #fff;
+  color: #c62828;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+  cursor: pointer;
+  z-index: 300;
+}
+
+.restart-btn:active { transform: scale(0.96); }
+
 /* ---------- Researcher setup panel ---------- */
 .setup-gear {
   position: fixed;

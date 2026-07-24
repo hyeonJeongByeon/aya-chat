@@ -7,6 +7,10 @@
 (function () {
   const C = window.CLOVER2;
   const WEEK = window.CLOVER_WEEK || 1;
+  // Team-testing mode: name-first fresh session every load, week picker,
+  // no persistence of settings/progress/transcripts between sessions.
+  const TESTING = !!window.CLOVER_TESTING;
+  const BASE = window.CLOVER_BASE || "";
 
   /* ================= Seeded RNG ================= */
   function hashStr(s) {
@@ -41,7 +45,7 @@
     catch (e) { return fallback; }
   }
 
-  let settings = loadJSON(SETTINGS_KEY, null) || {
+  let settings = (TESTING ? null : loadJSON(SETTINGS_KEY, null)) || {
     pid: "", interests: [], cancerOK: false, values: [],
     checkinTime: "", deepDays: [], voice: "Cathy", onboarded: false
   };
@@ -49,7 +53,7 @@
     settings.pid = urlParams.get("p");
   }
   if (!settings.pid) settings.pid = "P" + Math.floor(Math.random() * 1e6);
-  function saveSettings() { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); }
+  function saveSettings() { if (!TESTING) localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); }
   saveSettings();
 
   let config = loadJSON(CONFIG_KEY, { logUrl: "", offline: false });
@@ -179,11 +183,12 @@
 
   function log(who, text, phase) {
     const entry = {
-      t: new Date().toISOString(), seed: settings.pid, week: WEEK,
+      t: new Date().toISOString(), seed: settings.pid,
+      week: TESTING ? (Math.ceil(state.dayNum / 7) || 0) : WEEK,
       day: state.dayNum, phase: phase || state.phase, who, text
     };
     transcript.push(entry);
-    localStorage.setItem(transcriptKey, JSON.stringify(transcript));
+    if (!TESTING) localStorage.setItem(transcriptKey, JSON.stringify(transcript));
     remoteLog(entry);
   }
 
@@ -322,7 +327,7 @@
   /* Audio bubble; falls back to a placeholder note if the mp3 is missing. */
   function addAudioMessage(audioKey, caption) {
     const voice = (settings.voice || "Cathy").toLowerCase();
-    const src = "assets/audio2/" + audioKey + "-" + voice + ".mp3";
+    const src = BASE + "assets/audio2/" + audioKey + "-" + voice + ".mp3";
     const row = document.createElement("div");
     row.className = "message-row received";
     row.innerHTML = '<div class="bubble received audio-bubble">'
@@ -768,7 +773,7 @@
     let previewNote = false;
     const playPreview = async (name) => {
       if (previewAudio) previewAudio.pause();
-      previewAudio = new Audio("assets/audio2/preview-" + name.toLowerCase() + ".mp3");
+      previewAudio = new Audio(BASE + "assets/audio2/preview-" + name.toLowerCase() + ".mp3");
       previewAudio.addEventListener("error", async () => {
         if (!previewNote) { previewNote = true; await say("(" + name + "'s voice sample is coming soon!)", { typingMs: 500 }); }
       });
@@ -809,11 +814,82 @@
     });
   }
 
+  function pickWeek() {
+    return new Promise(async (resolve) => {
+      await say("Which week would you like to test?");
+      const r = await waitForUser([
+        { label: "Week 1", value: "1" }, { label: "Week 2", value: "2" },
+        { label: "Week 3", value: "3" }, { label: "Week 4", value: "4" }
+      ]);
+      const m = String(r.text).match(/[1-4]/);
+      resolve(m ? Number(m[0]) - 1 : 0);
+    });
+  }
+
+  /* Day-complete choice in testing mode: continue, or switch week. */
+  function dayChoice(nextLabel) {
+    return new Promise((resolve) => {
+      const wrap = document.createElement("div");
+      wrap.className = "day-btn-wrap";
+      const btn = document.createElement("button");
+      btn.className = "day-btn";
+      btn.textContent = nextLabel;
+      btn.addEventListener("click", () => { wrap.remove(); resolve("continue"); });
+      const alt = document.createElement("button");
+      alt.className = "chip";
+      alt.style.marginLeft = "8px";
+      alt.textContent = "🔀 Switch week";
+      alt.addEventListener("click", () => { wrap.remove(); resolve("switch"); });
+      wrap.appendChild(btn);
+      wrap.appendChild(alt);
+      messagesArea.appendChild(wrap);
+      scrollToBottom();
+    });
+  }
+
+  async function mainTesting() {
+    document.getElementById("weekBadge").textContent = "Team testing";
+    const restart = document.getElementById("restartBtn");
+    if (restart) restart.addEventListener("click", () => {
+      if (confirm("Restart with a new name? This session's chat will end (its log is already saved).")) location.reload();
+    });
+
+    await wait(500);
+    addSeparator("Clover team testing");
+    await say("Hi! Welcome to the Clover testing space 🍀");
+    await say("What's your name?");
+    const r = await waitForUser();
+    const name = (r.text || "Tester").trim().slice(0, 40) || "Tester";
+    settings.pid = name + " #" + Math.floor(100 + Math.random() * 900);
+    log("clover", "[SESSION START tester=" + settings.pid + "]");
+    await say("Thanks, " + name + "! Let's start with the onboarding screener — every test session begins fresh.");
+    await runOnboarding();
+
+    const schedule = buildSchedule();
+    let dayIdx = null;
+    while (true) {
+      if (dayIdx === null) dayIdx = (await pickWeek()) * 7;
+      const prev = dayIdx > 0 ? schedule[dayIdx - 1] : null;
+      await runDay(schedule[dayIdx], prev);
+      if (dayIdx >= 27) {
+        addSeparator("28 days complete 🎉");
+        await say("That's the full program! Use ↺ Restart (top left) to test again with another name, or pick a week below. 💛");
+        dayIdx = null;
+        continue;
+      }
+      const choice = await dayChoice("Continue to Day " + (dayIdx + 2) + " →");
+      dayIdx = choice === "switch" ? null : dayIdx + 1;
+    }
+  }
+
   async function main() {
     updateStatusTime();
     setInterval(updateStatusTime, 30000);
     autosizeInput();
     updateInputState(false);
+
+    if (TESTING) { await mainTesting(); return; }
+
     document.getElementById("weekBadge").textContent = "Week " + WEEK;
 
     await wait(500);
