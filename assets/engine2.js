@@ -814,72 +814,133 @@
     });
   }
 
-  function pickWeek() {
-    return new Promise(async (resolve) => {
-      await say("Which week would you like to test?");
-      const r = await waitForUser([
-        { label: "Week 1", value: "1" }, { label: "Week 2", value: "2" },
-        { label: "Week 3", value: "3" }, { label: "Week 4", value: "4" }
-      ]);
-      const m = String(r.text).match(/[1-4]/);
-      resolve(m ? Number(m[0]) - 1 : 0);
+  /* ---------- Team-testing mode ----------
+     Session lives in sessionStorage (per-tab): the tester's name/ID and
+     their onboarding answers survive week switches, but a new tab or
+     "New tester" starts clean. Picking a week (side buttons) reloads and
+     replays that week from its first day using the SAME onboarding. */
+  const TS_KEY = "clover2-test-session";
+  function loadSession() {
+    try { return JSON.parse(sessionStorage.getItem(TS_KEY)); } catch (e) { return null; }
+  }
+  function saveSession(sess) { sessionStorage.setItem(TS_KEY, JSON.stringify(sess)); }
+
+  function buildTestControls(session) {
+    const old = document.getElementById("restartBtn");
+    if (old) old.remove();
+    const panel = document.createElement("div");
+    panel.className = "test-controls";
+    panel.innerHTML = '<div class="test-controls-title">🍀 Testing' +
+      (session && session.settings.pid ? "<span>" + escapeHtml(session.settings.pid) + "</span>" : "") + "</div>";
+
+    for (let w = 1; w <= 4; w++) {
+      const b = document.createElement("button");
+      b.textContent = "Week " + w + (session && session.week === w ? " ▶" : "");
+      if (session && session.week === w) b.classList.add("active");
+      b.addEventListener("click", () => {
+        const sess = loadSession();
+        if (!sess || !sess.settings.onboarded) {
+          alert("Please finish the onboarding screener first 😊");
+          return;
+        }
+        if (sess.week === w && !confirm("Restart Week " + w + " from Day " + ((w - 1) * 7 + 1) + " with the same onboarding answers?")) return;
+        sess.week = w;
+        saveSession(sess);
+        location.reload();
+      });
+      panel.appendChild(b);
+    }
+
+    const nb = document.createElement("button");
+    nb.className = "new-tester";
+    nb.textContent = "🔄 New tester";
+    nb.addEventListener("click", () => {
+      if (!confirm("Start over with a new tester? This session's onboarding answers will be cleared (logs are already saved).")) return;
+      sessionStorage.removeItem(TS_KEY);
+      location.reload();
     });
+    panel.appendChild(nb);
+    document.body.appendChild(panel);
   }
 
-  /* Day-complete choice in testing mode: continue, or switch week. */
-  function dayChoice(nextLabel) {
+  /* Name prompt shown as an overlay on page load — not part of the chat. */
+  function askTesterName() {
     return new Promise((resolve) => {
-      const wrap = document.createElement("div");
-      wrap.className = "day-btn-wrap";
-      const btn = document.createElement("button");
-      btn.className = "day-btn";
-      btn.textContent = nextLabel;
-      btn.addEventListener("click", () => { wrap.remove(); resolve("continue"); });
-      const alt = document.createElement("button");
-      alt.className = "chip";
-      alt.style.marginLeft = "8px";
-      alt.textContent = "🔀 Switch week";
-      alt.addEventListener("click", () => { wrap.remove(); resolve("switch"); });
-      wrap.appendChild(btn);
-      wrap.appendChild(alt);
-      messagesArea.appendChild(wrap);
-      scrollToBottom();
+      const ov = document.createElement("div");
+      ov.className = "setup-overlay open";
+      ov.innerHTML = '<div class="setup-panel" style="text-align:center">' +
+        '<h2>🍀 Clover team testing</h2>' +
+        '<p class="sub">Enter your name to start a fresh test session. You will get a session ID like "Hailey #335" so your chat logs are easy to find. The name does not have to be unique.</p>' +
+        '<input type="text" id="testerName" placeholder="Your name" style="text-align:center;font-size:15px" maxlength="40">' +
+        '<div class="setup-actions" style="justify-content:center">' +
+        '<button class="primary" id="testerGo">Start testing →</button></div></div>';
+      document.body.appendChild(ov);
+      const input = ov.querySelector("#testerName");
+      const go = () => {
+        const name = input.value.trim();
+        if (!name) { input.focus(); return; }
+        ov.remove();
+        resolve(name);
+      };
+      ov.querySelector("#testerGo").addEventListener("click", go);
+      input.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+      setTimeout(() => input.focus(), 100);
     });
   }
 
   async function mainTesting() {
     document.getElementById("weekBadge").textContent = "Team testing";
-    const restart = document.getElementById("restartBtn");
-    if (restart) restart.addEventListener("click", () => {
-      if (confirm("Restart with a new name? This session's chat will end (its log is already saved).")) location.reload();
-    });
+    let session = loadSession();
+    buildTestControls(session);
 
-    await wait(500);
-    addSeparator("Clover team testing");
-    await say("Hi! Welcome to the Clover testing space 🍀");
-    await say("What's your name?");
-    const r = await waitForUser();
-    const name = (r.text || "Tester").trim().slice(0, 40) || "Tester";
-    settings.pid = name + " #" + Math.floor(100 + Math.random() * 900);
-    log("clover", "[SESSION START tester=" + settings.pid + "]");
-    await say("Thanks, " + name + "! Let's start with the onboarding screener — every test session begins fresh.");
-    await runOnboarding();
-
-    const schedule = buildSchedule();
-    let dayIdx = null;
-    while (true) {
-      if (dayIdx === null) dayIdx = (await pickWeek()) * 7;
-      const prev = dayIdx > 0 ? schedule[dayIdx - 1] : null;
-      await runDay(schedule[dayIdx], prev);
-      if (dayIdx >= 27) {
-        addSeparator("28 days complete 🎉");
-        await say("That's the full program! Use ↺ Restart (top left) to test again with another name, or pick a week below. 💛");
-        dayIdx = null;
-        continue;
-      }
-      const choice = await dayChoice("Continue to Day " + (dayIdx + 2) + " →");
-      dayIdx = choice === "switch" ? null : dayIdx + 1;
+    if (!session) {
+      const name = await askTesterName();
+      settings.pid = name + " #" + Math.floor(100 + Math.random() * 900);
+      settings.onboarded = false;
+      session = { settings, week: null };
+      saveSession(session);
+      buildTestControls(session);
+      document.querySelector(".test-controls .test-controls-title").innerHTML = "🍀 Testing<span>" + escapeHtml(settings.pid) + "</span>";
+      log("clover", "[SESSION START tester=" + settings.pid + "]");
+      await wait(400);
+      await runOnboarding();
+      session.settings = settings;
+      saveSession(session);
+      await say("You're all set! 🎉 Use the Week 1–4 buttons on the side to pick a week to test.");
+      return;
     }
+
+    Object.assign(settings, session.settings);
+
+    if (!settings.onboarded) {
+      log("clover", "[SESSION RESUME tester=" + settings.pid + " re-onboarding]");
+      await wait(400);
+      await runOnboarding();
+      session.settings = settings;
+      saveSession(session);
+      await say("You're all set! 🎉 Use the Week 1–4 buttons on the side to pick a week to test.");
+      return;
+    }
+
+    if (!session.week) {
+      await wait(400);
+      await say("Welcome back! Pick a week to test using the buttons on the side 🍀");
+      return;
+    }
+
+    const w = session.week;
+    const schedule = buildSchedule();
+    const start = (w - 1) * 7;
+    addSeparator("Testing Week " + w + " — " + settings.pid);
+    log("clover", "[WEEK " + w + " START tester=" + settings.pid + "]");
+
+    for (let i = 0; i < 7; i++) {
+      const g = start + i;
+      await dayButton((i === 0 ? "Start" : "Continue to") + " Day " + (g + 1) + " →");
+      await runDay(schedule[g], g > 0 ? schedule[g - 1] : null);
+    }
+    addSeparator("Week " + w + " complete 🎉");
+    await say("That's all of Week " + w + "! Pick another week on the side, or hit 🔄 New tester to start over. 💛");
   }
 
   async function main() {

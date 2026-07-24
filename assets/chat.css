@@ -491,25 +491,71 @@ body {
   stroke-linejoin: round;
 }
 
-/* Restart button (team-testing page) */
-.restart-btn {
+/* Team-testing control panel (outside the phone) */
+.test-controls {
   position: fixed;
   top: 14px;
   left: 14px;
-  border: none;
-  border-radius: 19px;
-  padding: 9px 16px;
-  background: #fff;
-  color: #c62828;
-  font-size: 14px;
-  font-weight: 600;
-  font-family: inherit;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.18);
-  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 14px;
+  padding: 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.16);
   z-index: 300;
+  width: 168px;
 }
 
-.restart-btn:active { transform: scale(0.96); }
+.test-controls-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #333;
+  padding-bottom: 2px;
+}
+
+.test-controls-title span {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: #777;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.test-controls button {
+  border: 1.5px solid #0b84ff;
+  background: #fff;
+  color: #0b84ff;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 13.5px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.test-controls button:active { transform: scale(0.97); }
+.test-controls button.active { background: #0b84ff; color: #fff; }
+
+.test-controls button.new-tester {
+  border-color: #e0b4b4;
+  color: #c62828;
+  margin-top: 4px;
+}
+
+@media (max-width: 800px) {
+  .test-controls {
+    flex-direction: row;
+    flex-wrap: wrap;
+    width: auto;
+    right: 64px;
+    align-items: center;
+  }
+  .test-controls-title span { display: inline; margin-left: 4px; }
+}
 
 /* ---------- Researcher setup panel ---------- */
 .setup-gear {
@@ -614,4 +660,17 @@ body {
   .iphone::before, .iphone::after { display: none; }
   .screen { border-radius: 0; }
   .bubble { max-width: 80%; }
+}
+
+/* Testing page: keep the phone clear of the side control panel */
+body.testing { padding-left: 200px; }
+
+@media (max-height: 730px) {
+  body.testing { padding-left: 196px; }
+  body.testing .iphone { width: calc(100% - 196px); }
+}
+
+@media (max-width: 800px) {
+  body.testing { padding-left: 0; padding-top: 60px; }
+  body.testing .iphone { width: 100%; }
 }
