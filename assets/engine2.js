@@ -778,9 +778,6 @@
         if (!previewNote) { previewNote = true; await say("(" + name + "'s voice sample is coming soon!)", { typingMs: 500 }); }
       });
       previewAudio.play().catch(() => {});
-      previewAudio.addEventListener("timeupdate", function stopAt() {
-        if (this.currentTime >= 8) { this.pause(); this.removeEventListener("timeupdate", stopAt); }
-      });
     };
     r = await waitForUser([
       { label: "▶️ Hear Cathy", onTap: () => playPreview("Cathy") },
