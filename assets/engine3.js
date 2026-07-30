@@ -940,6 +940,30 @@
     statusEl.className = "setup-status ok";
   });
   document.getElementById("cfgDownload").addEventListener("click", downloadTranscript);
+  const importInput = document.getElementById("cfgImportFile");
+  if (importInput) {
+    document.getElementById("cfgImport").addEventListener("click", () => importInput.click());
+    importInput.addEventListener("change", () => {
+      const file = importInput.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const data = JSON.parse(reader.result);
+          if (!data.settings || !Array.isArray(data.transcript)) throw new Error("not a Clover chat log");
+          if (data.pid && data.pid !== PID && !confirm("This log is for participant " + data.pid + " but this page is " + PID + ". Import anyway?")) return;
+          localStorage.setItem(K("settings"), JSON.stringify(data.settings));
+          localStorage.setItem(K("progress"), String(data.progress || 0));
+          localStorage.setItem(K("transcript"), JSON.stringify(data.transcript));
+          location.reload();
+        } catch (e) {
+          statusEl.textContent = "❌ Could not import: " + e.message + " (use the chatlog_..._.json file, not the .csv)";
+          statusEl.className = "setup-status err";
+        }
+      };
+      reader.readAsText(file);
+    });
+  }
   document.getElementById("cfgResetAll").addEventListener("click", () => {
     if (!confirm("Reset participant " + PID + " completely? Clears onboarding answers, progress, and the local chat history on this device.")) return;
     ["settings", "progress", "transcript"].forEach((n) => localStorage.removeItem(K(n)));
