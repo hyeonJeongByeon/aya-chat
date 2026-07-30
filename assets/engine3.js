@@ -348,9 +348,11 @@
   }
 
   function renderBadge(text) {
+    // Never let the trailing emoji wrap onto its own line.
+    const glued = String(text).replace(/ (\S+)$/, "\u00A0$1");
     const row = document.createElement("div");
     row.className = "message-row received";
-    row.innerHTML = '<div class="bubble received badge-card"><span class="badge-label">🏆 Badge Awarded</span>' + escapeHtml(text) + "</div>";
+    row.innerHTML = '<div class="bubble received badge-card"><span class="badge-label">🏆 Badge Awarded</span>' + escapeHtml(glued) + "</div>";
     messagesArea.appendChild(row);
     return row;
   }

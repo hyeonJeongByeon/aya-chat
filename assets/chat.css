@@ -254,6 +254,8 @@ body {
   color: #6b5416;
   font-weight: 600;
   text-align: center;
+  font-size: 13.5px;
+  max-width: 85%;
 }
 
 .badge-label {
