@@ -50,7 +50,15 @@
   });
   function saveSettings() { localStorage.setItem(K("settings"), JSON.stringify(settings)); }
 
-  let progress = Number(localStorage.getItem(K("progress")) || 0); // completed days
+  // Days completed per week: {1:0..7, 2:0..7, 3:0..7, 4:0..7}
+  let progressW = loadJSON(K("progressW"), null);
+  if (!progressW) {
+    progressW = { 1: 0, 2: 0, 3: 0, 4: 0 };
+    const legacy = Number(localStorage.getItem(K("progress")) || 0);
+    for (let w = 1; w <= 4; w++) progressW[w] = Math.max(0, Math.min(7, legacy - (w - 1) * 7));
+  }
+  function saveProgress() { localStorage.setItem(K("progressW"), JSON.stringify(progressW)); }
+  const totalCompleted = () => progressW[1] + progressW[2] + progressW[3] + progressW[4];
 
   let config = loadJSON(CONFIG_KEY, { logUrl: "", offline: false });
   function saveConfig() { localStorage.setItem(CONFIG_KEY, JSON.stringify(config)); }
@@ -242,7 +250,7 @@
     try {
       await fetch(config.logUrl, {
         method: "POST",
-        body: JSON.stringify({ action: "stateSave", pid: PID, state: { settings, progress } })
+        body: JSON.stringify({ action: "stateSave", pid: PID, state: { settings, progressW } })
       });
     } catch (e) { console.warn("state save failed:", e); }
   }
@@ -258,9 +266,13 @@
       const data = await res.json();
       if (data.ok && data.state && data.state.settings && data.state.settings.onboarded) {
         settings = data.state.settings;
-        progress = Number(data.state.progress || 0);
+        if (data.state.progressW) progressW = data.state.progressW;
+        else {
+          const legacy = Number(data.state.progress || 0);
+          for (let w = 1; w <= 4; w++) progressW[w] = Math.max(0, Math.min(7, legacy - (w - 1) * 7));
+        }
         saveSettings();
-        localStorage.setItem(K("progress"), String(progress));
+        saveProgress();
         const res2 = await fetch(config.logUrl + (config.logUrl.includes("?") ? "&" : "?") +
           "after=1&seed=" + encodeURIComponent(PID));
         const data2 = await res2.json();
@@ -276,7 +288,7 @@
 
   function downloadTranscript() {
     const stamp = new Date().toISOString().slice(0, 10);
-    const blob = new Blob([JSON.stringify({ pid: PID, settings, progress, transcript }, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ pid: PID, settings, progressW, transcript }, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = "chatlog_" + PID + "_" + stamp + ".json";
@@ -734,7 +746,8 @@
       addBadge("Day " + dayInfo.day + ": " + dayInfo.badge);
     }
     await wait(800);
-    await say("Streak: " + dayInfo.day + " day" + (dayInfo.day > 1 ? "s" : "") + " 🔥", { typingMs: 600 });
+    const streak = totalCompleted() + 1; // this day completes right after
+    await say("Streak: " + streak + " day" + (streak > 1 ? "s" : "") + " 🔥", { typingMs: 600 });
 
     // 8. Daily challenge
     state.phase = "ba";
@@ -869,19 +882,84 @@
     await say("That's everything — you're all set! 🎉");
   }
 
-  /* ================= Main ================= */
-  function dayButton(label) {
+  /* ================= Main (week panel, in-place) ================= */
+  let weekResolver = null;   // set while the flow is waiting at a boundary
+  let panelRefresh = () => {};
+
+  function buildWeekPanel() {
+    const panel = document.createElement("div");
+    panel.className = "test-controls";
+    panel.innerHTML = '<div class="test-controls-title">🍀 Clover<span>Participant ' + escapeHtml(PID) + "</span></div>";
+    const btns = [];
+    for (let w = 1; w <= 4; w++) {
+      const b = document.createElement("button");
+      b.addEventListener("click", () => {
+        if (!settings.onboarded) { alert("Please finish the getting-to-know-you questions first 😊"); return; }
+        if (progressW[w] >= 7) { alert("Week " + w + " is already complete ✓"); return; }
+        if (!weekResolver) { alert("Please finish the current day first 😊"); return; }
+        const r = weekResolver;
+        weekResolver = null;
+        r({ type: "week", week: w });
+      });
+      btns.push(b);
+      panel.appendChild(b);
+    }
+    document.body.appendChild(panel);
+    panelRefresh = () => {
+      for (let w = 1; w <= 4; w++) {
+        const done = progressW[w];
+        btns[w - 1].textContent = "Week " + w + (done >= 7 ? " ✓" : done > 0 ? " · " + done + "/7" : "");
+        btns[w - 1].classList.toggle("active", done > 0 && done < 7);
+      }
+    };
+    panelRefresh();
+  }
+
+  /* Wait at a boundary: either the in-chat button or a week-panel click. */
+  function boundary(label) {
     return new Promise((resolve) => {
-      const wrap = document.createElement("div");
-      wrap.className = "day-btn-wrap";
-      const btn = document.createElement("button");
-      btn.className = "day-btn";
-      btn.textContent = label;
-      btn.addEventListener("click", () => { wrap.remove(); resolve(); });
-      wrap.appendChild(btn);
-      messagesArea.appendChild(wrap);
-      scrollToBottom();
+      let wrap = null;
+      weekResolver = (val) => { if (wrap) wrap.remove(); resolve(val); };
+      if (label) {
+        wrap = document.createElement("div");
+        wrap.className = "day-btn-wrap";
+        const btn = document.createElement("button");
+        btn.className = "day-btn";
+        btn.textContent = label;
+        btn.addEventListener("click", () => {
+          wrap.remove();
+          weekResolver = null;
+          resolve({ type: "continue" });
+        });
+        wrap.appendChild(btn);
+        messagesArea.appendChild(wrap);
+        scrollToBottom();
+      }
     });
+  }
+
+  async function runWeek(schedule, w) {
+    while (progressW[w] < 7) {
+      const i = progressW[w];               // next day index within week
+      const globalIdx = (w - 1) * 7 + i;
+      await runDay(schedule[globalIdx], globalIdx > 0 ? schedule[globalIdx - 1] : null);
+      progressW[w] = i + 1;
+      saveProgress();
+      panelRefresh();
+      saveStateRemote();
+
+      if (progressW[w] >= 7) {
+        if (totalCompleted() >= 28) {
+          await say("You've completed the whole 28-day program! Thank you again 💛🍀");
+          return null;
+        }
+        await say("That's all of Week " + w + "! You can pick another week on the left whenever you're ready 🍀", { typingMs: 900 });
+        return null;
+      }
+      const choice = await boundary("Continue to Day " + (globalIdx + 2) + " →");
+      if (choice.type === "week") return choice.week;
+    }
+    return null;
   }
 
   async function main() {
@@ -890,8 +968,10 @@
     autosizeInput();
     updateInputState(false);
     document.getElementById("weekBadge").textContent = "Participant " + PID;
+    buildWeekPanel();
 
     await restoreFromRemote();
+    panelRefresh();
 
     // Reopen-the-app feel: replay everything so far, then continue.
     if (transcript.length) replayTranscript();
@@ -900,21 +980,27 @@
 
     if (!settings.onboarded) {
       await runOnboarding();
+      panelRefresh();
+      await say("Use the Week 1–4 buttons on the left to start whenever you're ready 🍀", { typingMs: 900 });
     }
 
     const schedule = buildSchedule();
 
-    if (progress >= 28) {
+    if (totalCompleted() >= 28) {
       await say("You've completed the whole 28-day program! Thank you again 💛🍀");
       return;
     }
 
-    for (let d = progress; d < 28; d++) {
-      await dayButton((d === 0 ? "Start" : "Continue to") + " Day " + (d + 1) + " →");
-      await runDay(schedule[d], d > 0 ? schedule[d - 1] : null);
-      progress = d + 1;
-      localStorage.setItem(K("progress"), String(progress));
-      saveStateRemote();
+    let nextWeek = null;
+    while (true) {
+      if (nextWeek === null) {
+        const choice = await boundary(null);  // wait for a week-panel click
+        nextWeek = choice.week;
+      }
+      const w = nextWeek;
+      addSeparator("Week " + w);
+      nextWeek = await runWeek(schedule, w);
+      if (totalCompleted() >= 28) return;
     }
   }
 
@@ -925,7 +1011,7 @@
   function openSetup() {
     document.getElementById("cfgLogUrl").value = config.logUrl || "";
     document.getElementById("cfgOffline").checked = config.offline;
-    statusEl.textContent = "Participant " + PID + " — day progress: " + progress + "/28";
+    statusEl.textContent = "Participant " + PID + " — days completed: " + totalCompleted() + "/28 (W1:" + progressW[1] + " W2:" + progressW[2] + " W3:" + progressW[3] + " W4:" + progressW[4] + ")";
     statusEl.className = "setup-status";
     overlay.classList.add("open");
   }
@@ -953,7 +1039,8 @@
           if (!data.settings || !Array.isArray(data.transcript)) throw new Error("not a Clover chat log");
           if (data.pid && data.pid !== PID && !confirm("This log is for participant " + data.pid + " but this page is " + PID + ". Import anyway?")) return;
           localStorage.setItem(K("settings"), JSON.stringify(data.settings));
-          localStorage.setItem(K("progress"), String(data.progress || 0));
+          if (data.progressW) localStorage.setItem(K("progressW"), JSON.stringify(data.progressW));
+          else localStorage.setItem(K("progress"), String(data.progress || 0));
           localStorage.setItem(K("transcript"), JSON.stringify(data.transcript));
           location.reload();
         } catch (e) {
@@ -966,7 +1053,7 @@
   }
   document.getElementById("cfgResetAll").addEventListener("click", () => {
     if (!confirm("Reset participant " + PID + " completely? Clears onboarding answers, progress, and the local chat history on this device.")) return;
-    ["settings", "progress", "transcript"].forEach((n) => localStorage.removeItem(K(n)));
+    ["settings", "progress", "progressW", "transcript"].forEach((n) => localStorage.removeItem(K(n)));
     location.reload();
   });
 
