@@ -12,21 +12,54 @@
   const BASE = window.CLOVER_BASE || "";
   const SESSION = "int2-" + new Date().toISOString().slice(5, 16).replace(/[-T:]/g, "") + "-" + Math.floor(100 + Math.random() * 900);
 
-  /* Week 1 content: the text exercises, in document order. TBD: weeks 2-4. */
+  /* Text exercises per week, in document order (no audio days). */
   const WEEK_DAYS = {
     1: [
       { label: "Savoring 1", ex: C.savoring.find((x) => x.week === 1 && x.n === 1) },
       { label: "Savoring 2", ex: C.savoring.find((x) => x.week === 1 && x.n === 2) },
       { label: "Gratitude 1", ex: C.gratitude.find((x) => x.week === 1 && x.n === 1) },
       { label: "Meaning 1", ex: C.meaning.find((x) => x.week === 1 && x.n === 1) }
+    ],
+    2: [
+      { label: "Savoring 1", ex: C.savoring.find((x) => x.week === 2 && x.n === 1) },
+      { label: "Gratitude 1", ex: C.gratitude.find((x) => x.week === 2 && x.n === 1) },
+      { label: "Meaning 1", ex: C.meaning.find((x) => x.week === 2 && x.n === 1) },
+      { label: "Meaning 2", ex: C.meaning.find((x) => x.week === 2 && x.n === 2) }
+    ],
+    3: [
+      { label: "Savoring 1", ex: C.savoring.find((x) => x.week === 3 && x.n === 1) },
+      { label: "Gratitude 1", ex: C.gratitude.find((x) => x.week === 3 && x.n === 1) },
+      { label: "Meaning 1", ex: C.meaning.find((x) => x.week === 3 && x.n === 1) },
+      { label: "Meaning 2", ex: C.meaning.find((x) => x.week === 3 && x.n === 2) }
+    ],
+    4: [
+      { label: "Gratitude 1", ex: C.gratitude.find((x) => x.week === 4 && x.n === 1) },
+      { label: "Gratitude 2", ex: C.gratitude.find((x) => x.week === 4 && x.n === 2) },
+      { label: "Meaning 1", ex: C.meaning.find((x) => x.week === 4 && x.n === 1) },
+      { label: "Meaning 2", ex: C.meaning.find((x) => x.week === 4 && x.n === 2) },
+      { label: "Meaning 3 (Final Reflection)", ex: C.meaning.find((x) => x.week === 4 && x.n === 3) }
     ]
   };
 
-  const ENGAGE_FALLBACKS = [
-    "That sounds really meaningful — what was that like for you?",
-    "I love that you shared that. What stood out to you the most about it?",
-    "Thanks for telling me — how did that leave you feeling?"
+  /* One-sentence active-listening mirror: reuses the participant's own
+     words, acknowledges the emotion when applicable. The scripted message
+     always follows it. Sent to the backend with the request so prompt
+     tweaks need no backend redeploys. */
+  const MIRROR_PROMPT = "You are Clover, a warm wellbeing chatbot for teen and young adult cancer survivors (ages ~15-29). The participant just answered a question. Reply with EXACTLY ONE short sentence of active listening that mirrors their own words back (reuse a phrase or detail they used, like a qualitative interviewer would - if they mention their dog, your sentence is about the dog) and, when the emotion is clear, acknowledges it (e.g. glad to hear you are excited). No questions. No advice. No new topics. Casual warm texting voice, at most one emoji, under 25 words. If they mention self-harm or crisis, instead respond with warmth and encourage them to contact their care team or call/text 988.";
+
+  /* Small activity ideas for low moods, drawn from the daily-challenge bank. */
+  const MOOD_SUGGESTIONS = [
+    "putting on a song you love and just listening for a few minutes 🎶",
+    "stepping outside for a couple minutes of fresh air 🌤️",
+    "texting someone you've been meaning to catch up with 👋",
+    "rewatching a favorite episode or scene 🍿",
+    "making your favorite snack 🍳",
+    "scrolling through photos that make you happy 📸",
+    "taking a short walk with your top songs on 🎧",
+    "doing one small thing you love, just because ❤️"
   ];
+
+
 
   let config = { logUrl: window.CLOVER_DEFAULT_LOG_URL || "" };
   const urlParams = new URLSearchParams(location.search);
@@ -71,33 +104,33 @@
   }
 
   /* ================= Active listening (AI with fallback) ================= */
-  let fbIdx = 0, engIdx = 0;
-  async function ai(mode, question, answer) {
+  let fbIdx = 0;
+  async function ai(question, answer) {
     if (config.logUrl) {
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 20000);
         const res = await fetch(config.logUrl, {
           method: "POST",
-          body: JSON.stringify({ action: "gemini", mode, question, answer }),
+          body: JSON.stringify({ action: "gemini", mode: "reflect", system: MIRROR_PROMPT, question, answer }),
           signal: controller.signal
         });
         clearTimeout(timer);
         const data = await res.json();
         if (data.ok && data.text) return data.text.trim();
+        console.warn("AI backend has no gemini support yet — using fallback");
       } catch (e) { console.warn("AI unavailable, using fallback:", e); }
     }
-    if (mode === "engage") { engIdx = (engIdx + 1) % ENGAGE_FALLBACKS.length; return ENGAGE_FALLBACKS[engIdx]; }
     fbIdx = (fbIdx + 1) % C.fallbackReflections.length;
     return C.fallbackReflections[fbIdx];
   }
 
-  async function aiSay(mode, question, answer) {
+  async function aiSay(question, answer) {
     const typing = addTypingIndicator();
-    const text = await ai(mode, question, answer);
+    const text = await ai(question, answer);
     typing.remove();
     addMessage(text, "received");
-    log("clover", "[AI-" + mode + "] " + text);
+    log("clover", "[AI] " + text);
     await wait(500);
     return text;
   }
@@ -179,15 +212,18 @@
     typing.remove();
   }
 
-  function waitForUser(chips) {
+  function waitForUser(chips, opts = {}) {
     return new Promise((resolve) => {
+      let idleTimer = null;
       const done = (val) => {
+        if (idleTimer) clearTimeout(idleTimer);
         state.pendingInput = null;
         chipsBar.innerHTML = "";
         updateInputState(false);
         resolve(val);
       };
       state.pendingInput = done;
+      if (opts.idleMs) idleTimer = setTimeout(() => done({ timeout: true, text: "" }), opts.idleMs);
       chipsBar.innerHTML = "";
       (chips || []).forEach((c) => {
         const btn = document.createElement("button");
@@ -266,7 +302,13 @@
   const fillValues = (t) => String(t)
     .replaceAll("{V1}", "Self-Growth").replaceAll("{V2}", "Feeling Hopeful").replaceAll("{V3}", "Authenticity");
 
-  /* Scripted exercise steps with active listening after each answer. */
+  /* Scripted exercise steps. After each participant answer: ONE AI
+     mirror sentence, then the script continues (the sparkly closing stays
+     scripted). No response for a while on the opening question -> offer
+     the swap question; still nothing -> gentle close and move on. */
+  const IDLE_FIRST_MS = 30000;   // opening question patience
+  const IDLE_LATER_MS = 45000;   // later questions patience
+
   async function runSteps(steps, allowSwap) {
     let questionAsked = false;
     for (const step of steps) {
@@ -281,13 +323,19 @@
         await say(pick(C.swapReminders), { typingMs: 800 });
         chips = [{ label: "🔄 Swap question", value: "__swap__" }];
       }
-      const reply = await waitForUser(chips);
+      const reply = await waitForUser(chips, { idleMs: questionAsked ? IDLE_LATER_MS : IDLE_FIRST_MS });
+
+      if (reply.timeout) {
+        if (allowSwap && !questionAsked) return "swapped-idle";
+        await say("It's okay — thank you for showing up today. We can leave it here. 💛", { typingMs: 900 });
+        return "abandoned";
+      }
       if (allowSwap && !questionAsked && (reply.text === "__swap__" || wantsSwap(reply.text))) {
         return "swapped";
       }
       questionAsked = true;
       const risky = await maybeRisk(reply.text);
-      if (!risky && step.ask) await aiSay("reflect", q, reply.text);
+      if (!risky && step.ask) await aiSay(q, reply.text);
     }
     return "done";
   }
@@ -308,18 +356,26 @@
 
     if (mood === "neu") {
       await say(pick(C.ackNeu));
+    } else if (mood === "pos" || mood === "kpos") {
+      // Follow-up -> one AI mirror sentence -> scripted validation.
+      await say(pick(C.moodFollowPos));
+      const r = await waitForUser();
+      const risky = await maybeRisk(r.text);
+      if (!risky) {
+        await aiSay("What made your day good?", r.text);
+        await say(pick(C.ackPos));
+      }
     } else {
-      const followUp = mood === "pos" || mood === "kpos" ? pick(C.moodFollowPos) : pick(C.moodFollowNeg);
-      await say(followUp);
-      const r1 = await waitForUser();
-      const risky1 = await maybeRisk(r1.text);
-      if (!risky1) {
-        // Active listening round 1: reflect + one engaging follow-up.
-        const q2 = await aiSay("engage", followUp, r1.text);
-        const r2 = await waitForUser();
-        const risky2 = await maybeRisk(r2.text);
-        // Round 2: closing reflection, no question.
-        if (!risky2) await aiSay("reflect", q2, r2.text);
+      // Low mood: follow-up -> AI mirror -> small suggestions from the
+      // challenge bank -> scripted validation.
+      await say(pick(C.moodFollowNeg));
+      const r = await waitForUser();
+      const risky = await maybeRisk(r.text);
+      if (!risky) {
+        await aiSay("What would help today feel a little better?", r.text);
+        const ideas = shuffledPair(MOOD_SUGGESTIONS);
+        await say("If it helps, here are a couple of small things you could try: " + ideas[0] + ", or " + ideas[1], { typingMs: 1100 });
+        await say(pick(C.ackNeg));
       }
     }
 
@@ -327,12 +383,24 @@
     state.phase = "intervention";
     addSeparator("🧘 Exercise of the Day 💭");
     log("clover", "[INTERVENTION " + dayInfo.label + "]");
-    const result = await runSteps(dayInfo.ex.def, !!dayInfo.ex.swap);
-    if (result === "swapped") {
-      await say("No problem at all! Let's try this one instead 😊", { typingMs: 800 });
-      log("clover", "[SWAPPED]");
-      await runSteps(dayInfo.ex.swap, false);
+    const canSwap = !!dayInfo.ex.swap;
+    const result = await runSteps(dayInfo.ex.def, canSwap);
+    if (result === "swapped" || result === "swapped-idle") {
+      await say(result === "swapped-idle"
+        ? "No rush at all — how about a different question instead? 😊"
+        : "No problem at all! Let's try this one instead 😊", { typingMs: 800 });
+      log("clover", "[SWAPPED" + (result === "swapped-idle" ? " (no response)" : "") + "]");
+      const second = await runSteps(dayInfo.ex.swap, false);
+      if (second === "abandoned") return;
     }
+  }
+
+  function shuffledPair(arr) {
+    const a = arr.slice();
+    const i = Math.floor(Math.random() * a.length);
+    const first = a.splice(i, 1)[0];
+    const second = a[Math.floor(Math.random() * a.length)];
+    return [first, second];
   }
 
   /* ================= Week panel + main ================= */
@@ -342,9 +410,8 @@
     panel.innerHTML = '<div class="test-controls-title">🍀 Clover<span>Interview 2</span></div>';
     for (let w = 1; w <= 4; w++) {
       const b = document.createElement("button");
-      b.textContent = "Week " + w + (WEEK_DAYS[w] ? "" : " (TBD)");
+      b.textContent = "Week " + w;
       b.addEventListener("click", () => {
-        if (!WEEK_DAYS[w]) { alert("Week " + w + " content is TBD — only Week 1 is loaded for now."); return; }
         if (!state.weekResolver) { alert("Please finish the current day first 😊"); return; }
         const r = state.weekResolver;
         state.weekResolver = null;

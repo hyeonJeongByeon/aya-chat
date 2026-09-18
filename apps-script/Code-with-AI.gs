@@ -52,7 +52,7 @@ function doPost(e) {
   catch (err) { return out_({ ok: false, error: "bad JSON" }); }
 
   if (d.action === "gemini") {
-    return out_(geminiReflect_(String(d.mode || "reflect"), String(d.question || ""), String(d.answer || "")));
+    return out_(geminiReflect_(String(d.mode || "reflect"), String(d.question || ""), String(d.answer || ""), d.system ? String(d.system) : null));
   }
 
   if (d.action === "stateSave") {
@@ -183,13 +183,13 @@ function saToken_() {
   return data.access_token;
 }
 
-function geminiReflect_(mode, question, answer) {
+function geminiReflect_(mode, question, answer, system) {
   try {
     var key = JSON.parse(PropertiesService.getScriptProperties().getProperty("SA_KEY"));
     var url = "https://" + LOCATION + "-aiplatform.googleapis.com/v1/projects/" + key.project_id +
       "/locations/" + LOCATION + "/publishers/google/models/" + MODEL + ":generateContent";
     var payload = {
-      systemInstruction: { parts: [{ text: mode === "engage" ? PROMPT_ENGAGE : PROMPT_REFLECT }] },
+      systemInstruction: { parts: [{ text: system ? String(system).slice(0, 4000) : (mode === "engage" ? PROMPT_ENGAGE : PROMPT_REFLECT) }] },
       contents: [{ role: "user", parts: [{ text: "Clover asked: \"" + String(question).slice(0, 1000) +
         "\"\n\nParticipant answered: \"" + String(answer).slice(0, 2000) + "\"\n\nWrite Clover's reply." }] }],
       generationConfig: { temperature: 0.8, maxOutputTokens: 1024, thinkingConfig: { thinkingBudget: 0 } }
@@ -211,5 +211,5 @@ function geminiReflect_(mode, question, answer) {
 }
 
 function testGemini() {
-  Logger.log(JSON.stringify(geminiReflect_("engage", "What made your day good?", "I got coffee with my best friend")));
+  Logger.log(JSON.stringify(geminiReflect_("reflect", "What made your day good?", "I got coffee with my best friend", null)));
 }
