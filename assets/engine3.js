@@ -319,6 +319,17 @@
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
+  /* Sequential no-repeat pick: walks a bank in order and only starts over
+     once every line has been used (persisted per participant). */
+  function rotPick(bankKey, arr) {
+    if (!settings.rot) settings.rot = {};
+    let i = Number.isInteger(settings.rot[bankKey]) ? settings.rot[bankKey] : 0;
+    if (i >= arr.length) i = 0;
+    settings.rot[bankKey] = i + 1;
+    saveSettings();
+    return arr[i];
+  }
+
   function scrollToBottom() {
     requestAnimationFrame(() => { messagesArea.scrollTop = messagesArea.scrollHeight; });
     setTimeout(() => { messagesArea.scrollTop = messagesArea.scrollHeight; }, 320);
@@ -531,13 +542,39 @@
   });
 
   /* ================= Helpers ================= */
-  const SWAP_CUES = ["swap", "different question", "something else", "another question",
-    "skip", "switch", "don't want", "do not want", "dont want", "not in the mood",
-    "rather not", "not talk about", "uncomfortable", "pass", "text version", "text instead",
-    "rather read", "read it", "rather a text", "no audio", "prefer text", "prefer a text"];
+  /* Strict swap triggers: whole-word "swap" or an explicit ask for another
+     question. Loose substrings (e.g. "pass" inside "compassion") caused
+     false swaps in interviews. */
+  const SWAP_RES = [
+    /\bswap\b/, /\bdifferent question\b/, /\banother question\b/, /\bnew question\b/,
+    /\b(change|switch)\s+(the\s+|this\s+)?question\b/, /\bskip\s+(this|the)\s+question\b/
+  ];
   function wantsSwap(text) {
     const n = String(text).toLowerCase();
-    return SWAP_CUES.some((c) => n.includes(c));
+    return SWAP_RES.some((re) => re.test(n));
+  }
+
+  /* Audio exercises only: asking for the text version. */
+  const TEXT_CUES = ["text version", "text instead", "prefer text", "prefer a text",
+    "rather read", "rather a text", "no audio", "read it"];
+  function wantsText(text) {
+    const n = String(text).toLowerCase();
+    return TEXT_CUES.some((c) => n.includes(c));
+  }
+
+  /* Disengaged / "I don't know" answers to a mood follow-up or an exercise
+     question. Two chances (original + swap), then thank them and move on. */
+  const DISENGAGE_RES = [
+    /\bi\s*(don'?t|do not)\s*know\b/, /\bidk\b/, /\bdunno\b/, /\bno\s+idea\b/,
+    /\bcan'?t\s+think\b/, /\bcannot\s+think\b/, /\bnot\s+sure\b/, /\bnot\s+really\b/,
+    /\bnothing\b/, /\bcan'?t\s+get\s+myself\b/, /\bnot\s+looking\s+forward\s+to\s+anything\b/,
+    /\bdon'?t\s+feel\s+like\b/, /\bnot\s+today\b/, /\bnot\s+in\s+the\s+mood\b/,
+    /\brather\s+not\b/, /\bdon'?t\s+want\s+to\s+(answer|talk|do)\b/,
+    /^no\W*$/, /^nope\W*$/, /^nah\W*$/, /^meh\W*$/
+  ];
+  function isDisengaged(text) {
+    const n = String(text).toLowerCase().trim();
+    return DISENGAGE_RES.some((re) => re.test(n));
   }
 
   const RISK_PATTERNS = [
@@ -568,10 +605,19 @@
   }
 
   function classifyMood(text, metaphor) {
-    const n = String(text).toLowerCase();
+    const n = String(text).toLowerCase().trim();
+    // Exact chip label match first (chips send the option text verbatim).
     for (const o of metaphor.options) {
-      if (o.k.some((k) => n.includes(k))) return o.v;
+      if (n === o.t.toLowerCase()) return o.v;
     }
+    // Keyword fallback: longest keyword wins, so "half full" beats "full".
+    let best = null, bestLen = 0;
+    for (const o of metaphor.options) {
+      for (const k of o.k) {
+        if (n.includes(k) && k.length > bestLen) { best = o.v; bestLen = k.length; }
+      }
+    }
+    if (best) return best;
     if (C.moodWordsNeg.some((w) => n.includes(w))) return "kneg";
     if (C.moodWordsPos.some((w) => n.includes(w))) return "kpos";
     return "neu";
@@ -583,8 +629,11 @@
     return NOT_DONE.some((w) => n === w || n.startsWith(w + " ") || n.startsWith(w + ",") || n.includes(" " + w + " ") || n.endsWith(" " + w));
   }
 
-  /* Run scripted steps (no AI — the next scripted line always responds). */
-  async function runSteps(steps, allowSwap) {
+  /* Run scripted steps (no AI — the next scripted line always responds).
+     On the first question: an explicit swap request returns "swapped";
+     a disengaged answer ("I don't know", "nothing", ...) returns
+     "disengaged" so the caller can offer the other question or wrap up. */
+  async function runSteps(steps, allowSwap, watchDisengage) {
     let questionAsked = false;
     for (const step of steps) {
       if (typeof step === "string") { await say(fillValues(step)); continue; }
@@ -600,8 +649,9 @@
       }
 
       const reply = await waitForUser(chips);
-      if (allowSwap && !questionAsked && (reply.text === "__swap__" || wantsSwap(reply.text))) {
-        return "swapped";
+      if (!questionAsked) {
+        if (allowSwap && (reply.text === "__swap__" || wantsSwap(reply.text))) return "swapped";
+        if (watchDisengage && isDisengaged(reply.text)) return "disengaged";
       }
       questionAsked = true;
       await maybeRisk(reply.text);
@@ -636,7 +686,7 @@
     resolved = true;
     if (state.pendingInput) state.pendingInput({ text: "__finished__", silent: true });
 
-    if (reply.text === "__swap__" || (reply.text !== "__finished__" && wantsSwap(reply.text))) {
+    if (reply.text === "__swap__" || (reply.text !== "__finished__" && (wantsText(reply.text) || wantsSwap(reply.text)))) {
       await say("Of course! Here's a text version 😊", { typingMs: 800 });
       log("clover", "[SWAPPED to text version]");
       await runSteps(ex.text, false);
@@ -646,7 +696,7 @@
 
     // Post-audio tapback; the next message shows up regardless (10s window).
     await say(pick(C.audioTapbacks), { typingMs: 800 });
-    await waitForUser(REACTION_CHIPS, { timeoutMs: 10000 });
+    await waitForUser(REACTION_CHIPS, { timeoutMs: 20000 });
     await wait(300);
 
     // Green ✨ affirmation sent as text after the tapback.
@@ -678,17 +728,29 @@
     log("clover", "[MOOD=" + mood + "]");
 
     if (mood === "pos" || mood === "kpos") {
-      await say(pick(C.moodFollowPos));
+      await say(rotPick("moodFollowPos", C.moodFollowPos));
       const r = await waitForUser();
       await maybeRisk(r.text);
-      await say(pick(C.ackPos));
+      await say(rotPick("ackPos", C.ackPos));
     } else if (mood === "neg" || mood === "kneg") {
-      await say(pick(C.moodFollowNeg));
+      await say(rotPick("moodFollowNeg", C.moodFollowNeg));
       const r = await waitForUser();
-      await maybeRisk(r.text);
-      await say(pick(C.ackNeg));
+      const risky = await maybeRisk(r.text);
+      if (!risky) {
+        if (isDisengaged(r.text)) {
+          // Can't think of anything → offer two small BA-style ideas, then validate.
+          const a = pick(C.moodSuggestions);
+          let b = pick(C.moodSuggestions);
+          while (b === a) b = pick(C.moodSuggestions);
+          await say("That's okay — sometimes it's hard to think of ideas. Here are a couple of small things you could try: " + a + ", or " + b);
+        } else {
+          await say(rotPick("negIdeaAck", C.negIdeaAck));
+        }
+      }
+      await say(rotPick("ackNeg", C.ackNeg));
     } else {
-      await say(pick(C.ackNeu));
+      // Neutral: no follow-up question, just the acknowledgment.
+      await say(rotPick("ackNeu", C.ackNeu));
     }
 
     // 3. Challenge check-in (yesterday's challenge)
@@ -710,7 +772,7 @@
     if (ff.type === "s") {
       await say(ff.text);
       await say(pick(C.funFactTapbacks), { typingMs: 800 });
-      await waitForUser(REACTION_CHIPS, { timeoutMs: 10000 });
+      await waitForUser(REACTION_CHIPS, { timeoutMs: 20000 });
       await wait(300);
     } else {
       await say(ff.q);
@@ -728,11 +790,23 @@
     } else {
       log("clover", "[INTERVENTION " + dayInfo.cat + " W" + ex.week + "," + ex.n + (ex.cancer ? " CANCER" : "") + (dayInfo.final ? " FINAL" : "") + "]");
       const allowSwap = !!ex.swap && !dayInfo.final;
-      const result = await runSteps(ex.def, allowSwap);
+      const GIVE_UP = "It's okay — thank you for showing up today. 💛";
+      let result = await runSteps(ex.def, allowSwap, true);
       if (result === "swapped") {
         await say("No problem at all! Let's try this one instead 😊", { typingMs: 800 });
         log("clover", "[SWAPPED]");
-        await runSteps(ex.swap, false);
+        result = await runSteps(ex.swap, false, true);
+        if (result === "disengaged") { log("clover", "[DISENGAGED after swap]"); await say(GIVE_UP, { typingMs: 900 }); }
+      } else if (result === "disengaged") {
+        if (allowSwap) {
+          await say("That's okay — some questions might not be the one you want to answer today. Here's a different one instead 😊", { typingMs: 800 });
+          log("clover", "[AUTO-SWAPPED disengaged]");
+          result = await runSteps(ex.swap, false, true);
+          if (result === "disengaged") { log("clover", "[DISENGAGED after swap]"); await say(GIVE_UP, { typingMs: 900 }); }
+        } else {
+          log("clover", "[DISENGAGED no swap]");
+          await say(GIVE_UP, { typingMs: 900 });
+        }
       }
     }
 

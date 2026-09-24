@@ -214,11 +214,36 @@ window.CLOVER3 = (function () {
   ];
 
   const swapReminders = [
-    "Reminder: If you want a different question, that's totally cool! Just let me know, I got another one in mind.",
-    "Reminder: Let me know if you want to swap the question",
-    "Reminder: If this question isn't your vibe today, we can try something else.",
-    "Reminder: We can always try a different question, no pressure.",
-    "Reminder: You can absolutely swap this with another question — I won't take it personally 😆"
+    "Reminder: If you want a different question, that's totally cool! Just tap 🔄 or type \"swap\".",
+    "Reminder: Tap 🔄 or type \"swap\" if you want to swap the question",
+    "Reminder: If this question isn't your vibe today, tap 🔄 or type \"swap\" and we'll try something else.",
+    "Reminder: We can always try a different question — just tap 🔄 or type \"swap\". No pressure.",
+    "Reminder: You can absolutely swap this question — tap 🔄 or type \"swap\". I won't take it personally 😆"
+  ];
+
+  /* Small activity ideas for low moods, drawn from the daily-challenge bank.
+     Offered when someone can't think of anything that would help. */
+  const moodSuggestions = [
+    "putting on a song you love and just listening for a few minutes 🎶",
+    "stepping outside for a couple minutes of fresh air 🌤️",
+    "texting someone you've been meaning to catch up with 👋",
+    "rewatching a favorite episode or scene 🍿",
+    "making your favorite snack 🍳",
+    "scrolling through photos that make you happy 📸",
+    "taking a short walk with your top songs on 🎧",
+    "sending a meme to a friend 😂",
+    "watching a funny video 📱",
+    "doing one small thing you love, just because ❤️"
+  ];
+
+  /* Quick acknowledgment when they DO name something that could help,
+     sent before the mood validation. */
+  const negIdeaAck = [
+    "That sounds like a really good idea 💛",
+    "That's a good one — even small things count 💛",
+    "Love that. Sometimes the little things help the most 💛",
+    "That could really help. I hope you get a chance to try it 💛",
+    "Great thinking — you know yourself well 💛"
   ];
 
 
@@ -934,6 +959,7 @@ window.CLOVER3 = (function () {
     greetings, moodMetaphors, moodWordsPos, moodWordsNeg, moodWordsNeu,
     moodFollowPos, moodFollowNeg, ackPos, ackNeu, ackNeg,
     funFacts, funFactTapbacks, audioTapbacks, swapReminders, funFactOpeners,
+    moodSuggestions, negIdeaAck,
     riskKeywords, riskResponse,
     onboardingIntro, interestNoneAck, interests, values,
     badges, day28BadgeIntro, day28Badge, affirmations,
