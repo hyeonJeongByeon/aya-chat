@@ -646,36 +646,23 @@
 
   /* Scripted response -> button -> AI version (green bubble) -> preference
      -> optional improvement note. Every step lands in the spreadsheet. */
+  /* Show both versions back to back, each under its own header:
+     "Scripted response" (the original message(s)), then
+     "AI-generated response" (green bubble). No preference prompts.
+     `scripted` may be a single string or an array of messages; the AI
+     rewrite uses the last one as its baseline. */
   async function sayCompare(scripted, ctx, opts = {}) {
-    await say(scripted, opts);
+    const msgs = Array.isArray(scripted) ? scripted : [scripted];
+    const baseline = msgs[msgs.length - 1];
+    const aiPromise = aiCompose({ qa: ctx.qa, scripted: baseline });
 
-    await waitForUser([{ label: "✨ See Clover's AI version", value: "__ai__", silent: true }]);
-    let aiText = await aiCompose({ qa: ctx.qa, scripted });
-    if (!aiText) {
-      aiText = scripted;
-      await sayAI(scripted + " (AI unavailable — showing scripted text)");
-    } else {
-      await sayAI(aiText);
-    }
+    addSeparator("Scripted response");
+    for (const m of msgs) await say(m, opts);
 
-    await say("Which response do you prefer? 🤔", { typingMs: 700 });
-    const pref = await waitForUser([
-      { label: "1️⃣ The first (scripted)", value: "scripted" },
-      { label: "2️⃣ The second (AI)", value: "ai" },
-      { label: "🤷 No preference", value: "none" }
-    ]);
-    log("participant", "[PREF=" + (pref.chip ? pref.text : "typed: " + pref.text) + "]");
-
-    const more = await waitForUser([
-      { label: "💬 Suggest an improvement", value: "__improve__", silent: true },
-      { label: "➡️ Continue", value: "__skip__", silent: true }
-    ]);
-    if (more.text === "__improve__") {
-      await say("How could this response be better? Type anything 📝", { typingMs: 700 });
-      const note = await waitForUser();
-      log("participant", "[IMPROVE] " + note.text);
-      await say("Got it — thank you! 💛", { typingMs: 600 });
-    }
+    addSeparator("AI-generated response");
+    const aiText = await aiPromise;
+    if (aiText) await sayAI(aiText);
+    else await sayAI(baseline + " (AI unavailable — showing scripted text)");
   }
 
   const RISK_PATTERNS = [
@@ -855,20 +842,22 @@
       await say(followQ);
       const r = await waitForUser();
       const risky = await maybeRisk(r.text);
-      if (!risky) {
+      const ack = rotPick("ackNeg", C.ackNeg);
+      if (risky) {
+        await say(ack);
+      } else {
+        let first;
         if (isDisengaged(r.text)) {
           // Can't think of anything → offer two small BA-style ideas, then validate.
           const a = pick(C.moodSuggestions);
           let b = pick(C.moodSuggestions);
           while (b === a) b = pick(C.moodSuggestions);
-          await say("That's okay — sometimes it's hard to think of ideas. Here are a couple of small things you could try: " + a + ", or " + b);
+          first = "That's okay — sometimes it's hard to think of ideas. Here are a couple of small things you could try: " + a + ", or " + b;
         } else {
-          await say(rotPick("negIdeaAck", C.negIdeaAck));
+          first = rotPick("negIdeaAck", C.negIdeaAck);
         }
+        await sayCompare([first, ack], { qa: [{ q: followQ, a: r.text }] });
       }
-      const ack = rotPick("ackNeg", C.ackNeg);
-      if (risky) await say(ack);
-      else await sayCompare(ack, { qa: [{ q: followQ, a: r.text }] });
     } else {
       // Neutral: no follow-up question, just the acknowledgment. No AI (per spec).
       await say(rotPick("ackNeu", C.ackNeu));
