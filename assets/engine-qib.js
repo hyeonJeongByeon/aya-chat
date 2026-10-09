@@ -1,0 +1,1264 @@
+/* AYA-CHAT Clover engine QIB — interview 2 (scripted vs AI active listening).
+   Identical to engine3 (the COMPLETE interview-1 day flow: greeting, mood
+   check-in, challenge check-in, fun fact, exercise, badge, streak, daily
+   challenge) with one addition: at three points — the mood acknowledgment
+   (positive/negative only), the challenge check-in response, and the
+   exercise ✨ closing — Clover first sends the scripted response, then a
+   button reveals the Gemini active-listening version in a green bubble,
+   followed by preference buttons and an optional improvement suggestion.
+   Everything is logged to the spreadsheet ([AI]/[PREF]/improvement rows).
+   Onboarding is skipped: each page bakes in the participant's interview-1
+   onboarding answers via window.CLOVER_PRESET. */
+(function () {
+  const C = window.CLOVER3;
+  const PID = String(window.CLOVER_PID || "test");
+  const BASE = window.CLOVER_BASE || "";
+
+  /* ================= Seeded RNG ================= */
+  function hashStr(s) {
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return h >>> 0;
+  }
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function shuffled(arr, rng) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  /* ================= Persistent state ================= */
+  const urlParams = new URLSearchParams(location.search);
+  const K = (name) => "clover3-" + name + "-" + PID;
+  const CONFIG_KEY = "clover3-config";
+
+  function loadJSON(key, fallback) {
+    try { return JSON.parse(localStorage.getItem(key)) || fallback; }
+    catch (e) { return fallback; }
+  }
+
+  let settings = loadJSON(K("settings"), {
+    interests: [], cancerOK: false, values: [],
+    checkinTime: "", deepDays: [], voice: "Cathy", onboarded: false
+  });
+  function saveSettings() { localStorage.setItem(K("settings"), JSON.stringify(settings)); }
+
+  // QIB: skip onboarding — seed the participant's interview-1 answers.
+  if (!settings.onboarded && window.CLOVER_PRESET) {
+    settings = Object.assign({}, settings, window.CLOVER_PRESET, { onboarded: true });
+    saveSettings();
+  }
+
+  // Days completed per week: {1:0..7, 2:0..7, 3:0..7, 4:0..7}
+  let progressW = loadJSON(K("progressW"), null);
+  if (!progressW) {
+    progressW = { 1: 0, 2: 0, 3: 0, 4: 0 };
+    const legacy = Number(localStorage.getItem(K("progress")) || 0);
+    for (let w = 1; w <= 4; w++) progressW[w] = Math.max(0, Math.min(7, legacy - (w - 1) * 7));
+  }
+  function saveProgress() { localStorage.setItem(K("progressW"), JSON.stringify(progressW)); }
+  const totalCompleted = () => progressW[1] + progressW[2] + progressW[3] + progressW[4];
+
+  let config = loadJSON(CONFIG_KEY, { logUrl: "", offline: false });
+  function saveConfig() { localStorage.setItem(CONFIG_KEY, JSON.stringify(config)); }
+  if (urlParams.get("log")) config.logUrl = urlParams.get("log");
+  else if (!config.logUrl && window.CLOVER_DEFAULT_LOG_URL) config.logUrl = window.CLOVER_DEFAULT_LOG_URL;
+
+  /* ================= Schedule =================
+     Weeks run Mon(0)..Sun(6). Day 28 = Sunday = Final Reflection.
+     Meaning lands on the participant's two chosen deep weekdays
+     (week 1 uses only one). Audio (2 mindfulness + 1 MBSC per week,
+     1+1 in week 4) sits on an every-other-day weekday triple that never
+     touches the deep days — so audio days are never consecutive, even
+     across week boundaries. */
+  const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+  const TRIPLES = [[0, 2, 4], [1, 3, 5], [2, 4, 6], [0, 3, 5], [1, 4, 6], [0, 2, 5], [1, 3, 6]];
+
+  function resolveDeepDays(rng) {
+    let dd = (settings.deepDays || []).slice(0, 2);
+    while (dd.length < 2) {
+      const cand = Math.floor(rng() * 7);
+      if (!dd.includes(cand)) dd.push(cand);
+    }
+    return dd.sort((a, b) => a - b);
+  }
+
+  function buildSchedule() {
+    const rng = mulberry32(hashStr("clover3-" + PID));
+    const deep = resolveDeepDays(rng);
+    const sundayChosen = deep.includes(6);
+
+    const validTriples = TRIPLES.filter((t) => !t.includes(deep[0]) && !t.includes(deep[1]));
+    let triple = validTriples.find((t) => t[0] === 1 && t[1] === 3 && t[2] === 5) ||
+      validTriples[Math.floor(rng() * validTriples.length)];
+    triple = triple.slice().sort((a, b) => a - b);
+
+    // Meaning slots per week (slot = weekday index 0-6).
+    const meaningByWeek = [];
+    if (sundayChosen) {
+      const other = deep.find((d) => d !== 6);
+      for (let w = 0; w < 4; w++) meaningByWeek.push([other, 6].sort((a, b) => a - b));
+    } else {
+      const w1pick = deep[Math.floor(rng() * 2)];
+      meaningByWeek.push([w1pick]);
+      meaningByWeek.push(deep.slice());
+      meaningByWeek.push(deep.slice());
+      meaningByWeek.push(deep.concat([6]).sort((a, b) => a - b));
+    }
+
+    // Meaning content sequence, chronological across the whole program.
+    const meaningSeq = [
+      C.meaning.find((m) => m.week === 1 && m.n === 1),
+      C.meaning.find((m) => m.week === 2 && m.n === 1),
+      C.meaning.find((m) => m.week === 2 && m.n === 2),
+      C.meaning.find((m) => m.week === 3 && m.n === 1),
+      C.meaning.find((m) => m.week === 3 && m.n === 2),
+      C.meaning.find((m) => m.week === 4 && m.n === 1),
+      C.meaning.find((m) => m.week === 4 && m.n === 2)
+    ];
+    const finalRef = C.meaning.find((m) => m.week === 4 && m.n === 3);
+
+    // Written (savoring/gratitude) multiset per week.
+    const writtenByWeek = sundayChosen
+      ? [["sav", "gr"], ["sav", "gr"], ["sav", "gr"], ["gr", "gr", "sav"]]
+      : [["sav", "sav", "gr"], ["sav", "gr"], ["sav", "gr"], ["gr", "gr"]];
+
+    // Savoring/gratitude content queues, chronological.
+    const savQ = [
+      C.savoring.find((x) => x.week === 1 && x.n === 1),
+      C.savoring.find((x) => x.week === 1 && x.n === 2),
+      C.savoring.find((x) => x.week === 2 && x.n === 1),
+      C.savoring.find((x) => x.week === 3 && x.n === 1)
+    ];
+    const grQ = [
+      C.gratitude.find((x) => x.week === 1 && x.n === 1),
+      C.gratitude.find((x) => x.week === 2 && x.n === 1),
+      C.gratitude.find((x) => x.week === 3 && x.n === 1),
+      C.gratitude.find((x) => x.week === 4 && x.n === 1),
+      C.gratitude.find((x) => x.week === 4 && x.n === 2)
+    ];
+    const mfQ = [
+      C.mindfulness.find((x) => x.week === 1 && x.n === 1),
+      C.mindfulness.find((x) => x.week === 1 && x.n === 2),
+      C.mindfulness.find((x) => x.week === 2 && x.n === 1),
+      C.mindfulness.find((x) => x.week === 2 && x.n === 2),
+      C.mindfulness.find((x) => x.week === 3 && x.n === 1),
+      C.mindfulness.find((x) => x.week === 3 && x.n === 2),
+      C.mindfulness.find((x) => x.week === 4 && x.n === 1)
+    ];
+    const mbQ = [1, 2, 3, 4].map((w) => C.mbsc.find((x) => x.week === w));
+
+    const greet = shuffled(C.greetings, rng).concat(shuffled(C.greetings, rng));
+    const metaOrders = [0, 1, 2, 3].map(() => shuffled(C.moodMetaphors, rng));
+
+    // Tailored BA substitution, spread across days 2-27.
+    const tailored = (settings.interests || []).map((i) => C.baTailored[i]).filter(Boolean);
+    const baByDay = C.baGeneric.slice();
+    if (tailored.length) {
+      const gap = Math.max(2, Math.floor(26 / tailored.length));
+      tailored.forEach((t, i) => {
+        const d = 1 + (i + 1) * gap;
+        if (d < 27) baByDay[d] = t;
+      });
+    }
+
+    let meaningIdx = 0, savIdx = 0, grIdx = 0, mfIdx = 0, mbIdx = 0;
+    const days = [];
+
+    for (let w = 0; w < 4; w++) {
+      const mSlots = meaningByWeek[w];
+      const audioSlots = w === 3 ? triple.slice(0, 2) : triple;
+      const taken = new Set(mSlots.concat(audioSlots));
+      const freeSlots = [0, 1, 2, 3, 4, 5, 6].filter((s) => !taken.has(s));
+      const written = shuffled(writtenByWeek[w], rng);
+      const catBySlot = {};
+
+      mSlots.forEach((s) => { catBySlot[s] = "mn"; });
+      audioSlots.forEach((s, i) => { catBySlot[s] = (w === 3 ? ["mf", "mb"] : ["mf", "mb", "mf"])[i]; });
+      freeSlots.forEach((s, i) => { catBySlot[s] = written[i]; });
+
+      for (let s = 0; s < 7; s++) {
+        const d = w * 7 + s;
+        const cat = catBySlot[s];
+        let exercise = null, isFinal = false;
+
+        if (cat === "mn") {
+          if (d === 27) { exercise = finalRef; isFinal = true; }
+          else {
+            const m = meaningSeq[meaningIdx++];
+            exercise = { week: m.week, n: m.n, def: m.def, swap: m.swap };
+            if (settings.cancerOK && m.n === 1) {
+              const ca = C.cancer.find((x) => x.week === m.week);
+              exercise = { week: m.week, n: 1, def: ca.steps, swap: m.def, cancer: true };
+            }
+          }
+        }
+        else if (cat === "sav") exercise = savQ[savIdx++];
+        else if (cat === "gr") exercise = grQ[grIdx++];
+        else if (cat === "mf") exercise = mfQ[mfIdx++];
+        else if (cat === "mb") exercise = mbQ[mbIdx++];
+
+        days.push({
+          day: d + 1, week: w + 1, weekday: WEEKDAYS[s], cat,
+          exercise, final: isFinal,
+          funFact: C.funFacts[d],
+          badge: d < 27 ? C.badges[d] : null,
+          ba: baByDay[d],
+          greeting: greet[d],
+          metaphor: metaOrders[w][s]
+        });
+      }
+    }
+    return days;
+  }
+
+  /* ================= Logging + backend sync ================= */
+  let transcript = loadJSON(K("transcript"), []);
+
+  function log(who, text, phase) {
+    const entry = {
+      t: new Date().toISOString(), seed: PID,
+      week: Math.ceil(state.dayNum / 7) || 0,
+      day: state.dayNum, phase: phase || state.phase, who, text
+    };
+    transcript.push(entry);
+    localStorage.setItem(K("transcript"), JSON.stringify(transcript));
+    remoteLog(entry);
+  }
+
+  const remoteQueue = [];
+  let remotePumping = false;
+  function remoteLog(entry) {
+    if (!config.logUrl || config.offline) return;
+    remoteQueue.push(Object.assign({ action: "log" }, entry));
+    pumpRemote();
+  }
+  async function pumpRemote() {
+    if (remotePumping) return;
+    remotePumping = true;
+    while (remoteQueue.length) {
+      const e = remoteQueue.shift();
+      try { await fetch(config.logUrl, { method: "POST", body: JSON.stringify(e) }); }
+      catch (err) { console.warn("remote log failed:", err); }
+    }
+    remotePumping = false;
+  }
+
+  async function saveStateRemote() {
+    if (!config.logUrl || config.offline) return;
+    try {
+      await fetch(config.logUrl, {
+        method: "POST",
+        body: JSON.stringify({ action: "stateSave", pid: PID, state: { settings, progressW } })
+      });
+    } catch (e) { console.warn("state save failed:", e); }
+  }
+
+  /* Cross-device backup: if this browser has nothing but a backend is
+     configured, pull settings/progress/transcript from the sheet. */
+  async function restoreFromRemote() {
+    if (!config.logUrl || config.offline) return false;
+    if (settings.onboarded || transcript.length) return false;
+    try {
+      const res = await fetch(config.logUrl + (config.logUrl.includes("?") ? "&" : "?") +
+        "action=state&pid=" + encodeURIComponent(PID));
+      const data = await res.json();
+      if (data.ok && data.state && data.state.settings && data.state.settings.onboarded) {
+        settings = data.state.settings;
+        if (data.state.progressW) progressW = data.state.progressW;
+        else {
+          const legacy = Number(data.state.progress || 0);
+          for (let w = 1; w <= 4; w++) progressW[w] = Math.max(0, Math.min(7, legacy - (w - 1) * 7));
+        }
+        saveSettings();
+        saveProgress();
+        const res2 = await fetch(config.logUrl + (config.logUrl.includes("?") ? "&" : "?") +
+          "after=1&seed=" + encodeURIComponent(PID));
+        const data2 = await res2.json();
+        if (data2.ok && data2.rows) {
+          transcript = data2.rows.map((r) => ({ t: r.t, seed: r.seed, week: r.week, day: r.day, phase: r.phase, who: r.who, text: r.text }));
+          localStorage.setItem(K("transcript"), JSON.stringify(transcript));
+        }
+        return true;
+      }
+    } catch (e) { console.warn("remote restore failed:", e); }
+    return false;
+  }
+
+  function downloadTranscript() {
+    const stamp = new Date().toISOString().slice(0, 10);
+    const blob = new Blob([JSON.stringify({ pid: PID, settings, progressW, transcript }, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "chatlog_" + PID + "_" + stamp + ".json";
+    a.click();
+    URL.revokeObjectURL(a.href);
+    // CSV too — easy to read in Excel/Sheets.
+    const q = (x) => '"' + String(x).replaceAll('"', '""') + '"';
+    const lines = ["timestamp,pid,week,day,phase,who,text"];
+    transcript.forEach((r) => lines.push([r.t, r.seed, r.week, r.day, r.phase, r.who, r.text].map(q).join(",")));
+    const blob2 = new Blob([lines.join("\n")], { type: "text/csv" });
+    const a2 = document.createElement("a");
+    a2.href = URL.createObjectURL(blob2);
+    a2.download = "chatlog_" + PID + "_" + stamp + ".csv";
+    a2.click();
+    URL.revokeObjectURL(a2.href);
+  }
+
+  /* ================= Chat UI ================= */
+  const messagesArea = document.getElementById("messagesArea");
+  const inputField = document.getElementById("inputField");
+  const sendBtn = document.getElementById("sendBtn");
+  const chatForm = document.getElementById("chatForm");
+  const statusTime = document.getElementById("statusTime");
+  const dateSep = document.getElementById("dateSep");
+  const chipsBar = document.getElementById("chipsBar");
+
+  const state = { dayNum: 0, phase: "boot", lastCloverRow: null, pendingInput: null, pendingTimer: null, replaying: false };
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+  /* Sequential no-repeat pick: walks a bank in order and only starts over
+     once every line has been used (persisted per participant). */
+  function rotPick(bankKey, arr) {
+    if (!settings.rot) settings.rot = {};
+    let i = Number.isInteger(settings.rot[bankKey]) ? settings.rot[bankKey] : 0;
+    if (i >= arr.length) i = 0;
+    settings.rot[bankKey] = i + 1;
+    saveSettings();
+    return arr[i];
+  }
+
+  function scrollToBottom() {
+    requestAnimationFrame(() => { messagesArea.scrollTop = messagesArea.scrollHeight; });
+    setTimeout(() => { messagesArea.scrollTop = messagesArea.scrollHeight; }, 320);
+  }
+
+  function updateStatusTime() {
+    const now = new Date();
+    const fmt = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", hour12: true }).format(now);
+    statusTime.textContent = fmt.replace(/\s?[AP]M$/, "");
+    dateSep.textContent = "Today " + fmt;
+  }
+
+  function escapeHtml(str) {
+    return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function addTypingIndicator() {
+    const row = document.createElement("div");
+    row.className = "message-row received typing-row";
+    row.innerHTML = '<div class="typing-bubble"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div>';
+    messagesArea.appendChild(row);
+    scrollToBottom();
+    return row;
+  }
+
+  function renderMessage(text, side, extraClass) {
+    const row = document.createElement("div");
+    row.className = "message-row " + (side === "sent" ? "sent" : "received");
+    row.innerHTML = '<div class="bubble ' + (side === "sent" ? "sent" : "received") + (extraClass ? " " + extraClass : "") + '">' + escapeHtml(text) + "</div>";
+    messagesArea.appendChild(row);
+    if (side !== "sent") state.lastCloverRow = row;
+    return row;
+  }
+
+  function addMessage(text, side, extraClass) {
+    renderMessage(text, side, extraClass);
+    scrollToBottom();
+    log(side === "sent" ? "participant" : "clover", text);
+  }
+
+  function renderBadge(text) {
+    // Never let the trailing emoji wrap onto its own line.
+    const glued = String(text).replace(/ (\S+)$/, "\u00A0$1");
+    const row = document.createElement("div");
+    row.className = "message-row received";
+    row.innerHTML = '<div class="bubble received badge-card"><span class="badge-label">🏆 Badge Awarded</span>' + escapeHtml(glued) + "</div>";
+    messagesArea.appendChild(row);
+    return row;
+  }
+
+  function addBadge(text) {
+    renderBadge(text);
+    scrollToBottom();
+    log("clover", "[BADGE] " + text);
+  }
+
+  function renderSeparator(label) {
+    const div = document.createElement("div");
+    div.className = "date-sep";
+    div.textContent = label;
+    messagesArea.appendChild(div);
+    return div;
+  }
+
+  function addSeparator(label) {
+    renderSeparator(label);
+    scrollToBottom();
+    log("clover", "[HEADER] " + label);
+  }
+
+  function addTapbackToLast(emoji) {
+    if (!state.lastCloverRow) return;
+    const tb = document.createElement("div");
+    tb.className = "tapback";
+    tb.textContent = emoji;
+    state.lastCloverRow.querySelector(".bubble").appendChild(tb);
+    log("participant", "[TAPBACK] " + emoji);
+  }
+
+  function renderAudio(src, caption) {
+    const row = document.createElement("div");
+    row.className = "message-row received";
+    row.innerHTML = '<div class="bubble received audio-bubble">'
+      + '<span class="audio-caption">' + escapeHtml(caption) + "</span>"
+      + '<audio controls preload="metadata" src="' + src + '"></audio></div>';
+    messagesArea.appendChild(row);
+    state.lastCloverRow = row;
+    const audio = row.querySelector("audio");
+    audio.addEventListener("error", () => {
+      row.querySelector(".bubble").innerHTML =
+        '<span class="audio-caption">' + escapeHtml(caption) + "</span>🎧 (Audio unavailable)";
+    });
+    return audio;
+  }
+
+  function addAudioMessage(audioKey, caption) {
+    const voice = (settings.voice || "Cathy").toLowerCase();
+    const src = BASE + "assets/audio2/" + audioKey + "-" + voice + ".mp3";
+    const audio = renderAudio(src, caption);
+    scrollToBottom();
+    log("clover", "[AUDIO] " + audioKey + "-" + voice + ".mp3");
+    return audio;
+  }
+
+  /* Replay a saved transcript instantly (reopening the messages app). */
+  function replayTranscript() {
+    state.replaying = true;
+    for (const e of transcript) {
+      const txt = String(e.text);
+      if (e.who === "participant") {
+        if (txt.startsWith("[PREF=") || txt.startsWith("[IMPROVE] ")) { /* data markers */ }
+        else if (txt.startsWith("[TAPBACK] ")) {
+          if (state.lastCloverRow) {
+            const tb = document.createElement("div");
+            tb.className = "tapback";
+            tb.textContent = txt.slice(10);
+            state.lastCloverRow.querySelector(".bubble").appendChild(tb);
+          }
+        } else renderMessage(txt, "sent");
+      } else {
+        if (txt.startsWith("[AI] ")) renderMessage("✨ " + txt.slice(5), "received", "ai");
+        else if (txt.startsWith("[HEADER] ")) renderSeparator(txt.slice(9));
+        else if (txt.startsWith("[BADGE] ")) renderBadge(txt.slice(8));
+        else if (txt.startsWith("[AUDIO] ")) {
+          const file = txt.slice(8);
+          renderAudio(BASE + "assets/audio2/" + file, "Guided audio exercise");
+        }
+        else if (txt.startsWith("[")) { /* internal markers — skip */ }
+        else renderMessage(txt, "received");
+      }
+    }
+    state.replaying = false;
+    scrollToBottom();
+  }
+
+  function updateInputState(enabled) {
+    inputField.disabled = !enabled;
+    sendBtn.classList.toggle("active", enabled && inputField.value.trim().length > 0);
+  }
+
+  function autosizeInput() {
+    inputField.style.height = "auto";
+    inputField.style.height = Math.min(inputField.scrollHeight, 96) + "px";
+    sendBtn.classList.toggle("active", !inputField.disabled && inputField.value.trim().length > 0);
+  }
+
+  async function say(text, opts = {}) {
+    const typing = addTypingIndicator();
+    await wait(opts.typingMs ?? Math.min(900 + text.length * 12, 3000));
+    typing.remove();
+    addMessage(text, "received", opts.extraClass);
+    await wait(opts.afterMs ?? 500);
+  }
+
+  async function pauseBeat(sec) {
+    const typing = addTypingIndicator();
+    await wait(sec * 1000);
+    typing.remove();
+  }
+
+  function waitForUser(chips, opts = {}) {
+    return new Promise((resolve) => {
+      const done = (val) => {
+        if (state.pendingTimer) { clearTimeout(state.pendingTimer); state.pendingTimer = null; }
+        state.pendingInput = null;
+        chipsBar.innerHTML = "";
+        updateInputState(false);
+        resolve(val);
+      };
+      state.pendingInput = done;
+      renderChips(chips || [], done);
+      updateInputState(true);
+      inputField.focus();
+      if (opts.timeoutMs) {
+        state.pendingTimer = setTimeout(() => done({ timeout: true, text: "" }), opts.timeoutMs);
+      }
+    });
+  }
+
+  function renderChips(chips, done) {
+    chipsBar.innerHTML = "";
+    chips.forEach((c) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "chip" + (c.reaction ? " reaction" : "");
+      btn.textContent = c.label;
+      btn.addEventListener("click", () => {
+        if (!state.pendingInput) return;
+        if (c.onTap) { c.onTap(btn); return; }
+        if (c.reaction) addTapbackToLast(c.label);
+        else if (!c.silent) addMessage(c.label, "sent");
+        done({ text: c.value ?? c.label, chip: true, reaction: !!c.reaction });
+      });
+      chipsBar.appendChild(btn);
+    });
+    scrollToBottom();
+  }
+
+  chatForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const text = inputField.value.trim();
+    if (!text || !state.pendingInput) return;
+    addMessage(text, "sent");
+    inputField.value = "";
+    autosizeInput();
+    state.pendingInput({ text, chip: false });
+  });
+
+  inputField.addEventListener("input", autosizeInput);
+  inputField.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); chatForm.requestSubmit(); }
+  });
+
+  /* ================= Helpers ================= */
+  /* Strict swap triggers: whole-word "swap" or an explicit ask for another
+     question. Loose substrings (e.g. "pass" inside "compassion") caused
+     false swaps in interviews. */
+  const SWAP_RES = [
+    /\bswap\b/, /\bdifferent question\b/, /\banother question\b/, /\bnew question\b/,
+    /\b(change|switch)\s+(the\s+|this\s+)?question\b/, /\bskip\s+(this|the)\s+question\b/
+  ];
+  function wantsSwap(text) {
+    const n = String(text).toLowerCase();
+    return SWAP_RES.some((re) => re.test(n));
+  }
+
+  /* Audio exercises only: asking for the text version. */
+  const TEXT_CUES = ["text version", "text instead", "prefer text", "prefer a text",
+    "rather read", "rather a text", "no audio", "read it"];
+  function wantsText(text) {
+    const n = String(text).toLowerCase();
+    return TEXT_CUES.some((c) => n.includes(c));
+  }
+
+  /* Disengaged / "I don't know" answers to a mood follow-up or an exercise
+     question. Two chances (original + swap), then thank them and move on. */
+  const DISENGAGE_RES = [
+    /\bi\s*(don'?t|do not)\s*know\b/, /\bidk\b/, /\bdunno\b/, /\bno\s+idea\b/,
+    /\bcan'?t\s+think\b/, /\bcannot\s+think\b/, /\bnot\s+sure\b/, /\bnot\s+really\b/,
+    /\bnothing\b/, /\bcan'?t\s+get\s+myself\b/, /\bnot\s+looking\s+forward\s+to\s+anything\b/,
+    /\bdon'?t\s+feel\s+like\b/, /\bnot\s+today\b/, /\bnot\s+in\s+the\s+mood\b/,
+    /\brather\s+not\b/, /\bdon'?t\s+want\s+to\s+(answer|talk|do)\b/,
+    /^no\W*$/, /^nope\W*$/, /^nah\W*$/, /^meh\W*$/
+  ];
+  function isDisengaged(text) {
+    const n = String(text).toLowerCase().trim();
+    return DISENGAGE_RES.some((re) => re.test(n));
+  }
+
+  /* ================= QIB: Gemini active listening ================= */
+  const QIB_PROMPT = [
+    "You are Clover, a warm wellbeing chatbot texting with teen and young adult cancer survivors (ages ~15-29).",
+    "You get a short exchange (Clover's questions, the participant's answers) and Clover's SCRIPTED response.",
+    "Rewrite the scripted response into ONE improved message that shows real active listening:",
+    "- Open with a short, natural acknowledgment phrase specific to what they shared, then flow into the scripted message (keep its meaning, warmth, and any emoji; smooth the join so it reads as one natural message, usually with an em dash).",
+    "- PARAPHRASE their details instead of copying their words back. If they baked a vanilla cake, say 'whipping up a sweet, classic treat', not 'you baked a vanilla cake'.",
+    "- Name the concrete things they mentioned (people, pets, places, activities, feelings) — that is what makes someone feel heard.",
+    "- If they answered several questions, weave the key details from ALL answers together.",
+    "- If their answer is short or unengaged (like 'yes', 'ok', 'it was expected'), do NOT invent details. Stay close to the scripted response with only a light, gentle adjustment that matches their energy.",
+    "- Match the emotional tone: upbeat for good news, gentle and validating on hard days.",
+    "- No questions. No advice. No new topics. At most one emoji. Under 40 words. Output ONLY the message text.",
+    "- If they mention self-harm or crisis, ignore the format: respond with warmth and encourage them to contact their care team or call/text 988.",
+    "",
+    "Examples:",
+    "Q: Did you get started on that task you've been avoiding? A: \"Yes, I got my oil changed\" SCRIPTED: \"It feels nice to make headway on something that's been on the to-do list for a long time.\" -> Knocking out that car maintenance chore—it feels so nice to make headway on something that's been on your to-do list for a long time!",
+    "Q: Is there a small thing you can think of to do that would help? A: \"call a friend\" SCRIPTED: \"Low days don't last forever, even when it feels like they will. You've gotten through hard days before 💛\" -> Reaching out to connect with someone who cares about you today—low days don't last forever, even when it feels like they will. You've gotten through hard days before 💛",
+    "Q: How has your cancer experience changed the way you see your strengths / your priorities / what you care about? A: \"more confident with public speaking\" / \"appreciate my friends and family more\" / \"being in the moment more\" SCRIPTED: \"It takes courage to reflect on how your experiences have shaped you.\" -> It takes courage to reflect on how your experiences have shaped your public speaking confidence, your love for family, and your focus on staying in the moment.",
+    "Q: Did you reach out and make plans with a friend? A: \"Yes\" SCRIPTED: \"It's always fun to hang out with someone who gets you!\" -> Taking that step to line up time together—it's always fun to hang out with someone who gets you!"
+  ].join("\n");
+
+  async function aiCompose(ctx) {
+    // ctx: { qa: [{q, a}...], scripted }
+    const lines = ctx.qa.map((p) => "Clover: " + String(p.q).slice(0, 160) + "\nParticipant: " + String(p.a).slice(0, 220));
+    const question = lines.join("\n").slice(0, 980);
+    const answer = (ctx.qa.length ? String(ctx.qa[ctx.qa.length - 1].a) : "").slice(0, 500) +
+      "\n\nSCRIPTED RESPONSE TO REWRITE: \"" + String(ctx.scripted).slice(0, 600) + "\"";
+    if (config.logUrl && !config.offline) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15000);
+        const res = await fetch(config.logUrl, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify({ action: "gemini", mode: "reflect", system: QIB_PROMPT, question, answer }),
+          signal: controller.signal
+        });
+        clearTimeout(timer);
+        const data = await res.json();
+        if (data.ok && data.text) return data.text.trim();
+        console.warn("QIB AI error:", data.error);
+      } catch (e) { console.warn("QIB AI unavailable:", e); }
+    }
+    return null;
+  }
+
+  async function sayAI(text) {
+    const typing = addTypingIndicator();
+    await wait(1200);
+    typing.remove();
+    renderMessage("✨ " + text, "received", "ai");
+    scrollToBottom();
+    log("clover", "[AI] " + text);
+    await wait(400);
+  }
+
+  /* Scripted response -> button -> AI version (green bubble) -> preference
+     -> optional improvement note. Every step lands in the spreadsheet. */
+  async function sayCompare(scripted, ctx, opts = {}) {
+    await say(scripted, opts);
+
+    await waitForUser([{ label: "✨ See Clover's AI version", value: "__ai__", silent: true }]);
+    let aiText = await aiCompose({ qa: ctx.qa, scripted });
+    if (!aiText) {
+      aiText = scripted;
+      await sayAI(scripted + " (AI unavailable — showing scripted text)");
+    } else {
+      await sayAI(aiText);
+    }
+
+    await say("Which response do you prefer? 🤔", { typingMs: 700 });
+    const pref = await waitForUser([
+      { label: "1️⃣ The first (scripted)", value: "scripted" },
+      { label: "2️⃣ The second (AI)", value: "ai" },
+      { label: "🤷 No preference", value: "none" }
+    ]);
+    log("participant", "[PREF=" + (pref.chip ? pref.text : "typed: " + pref.text) + "]");
+
+    const more = await waitForUser([
+      { label: "💬 Suggest an improvement", value: "__improve__", silent: true },
+      { label: "➡️ Continue", value: "__skip__", silent: true }
+    ]);
+    if (more.text === "__improve__") {
+      await say("How could this response be better? Type anything 📝", { typingMs: 700 });
+      const note = await waitForUser();
+      log("participant", "[IMPROVE] " + note.text);
+      await say("Got it — thank you! 💛", { typingMs: 600 });
+    }
+  }
+
+  const RISK_PATTERNS = [
+    /kill(ing)?\s+(myself|me)/, /suicid/, /end(ing)?\s+my\s+life/,
+    /want(ed)?\s+to\s+die/, /wanna\s+die/, /rather\s+be\s+dead/,
+    /hurt(ing)?\s+myself/, /harm(ing)?\s+myself/, /self[\s-]?harm/,
+    /cut(ting)?\s+myself/, /overdos/, /don'?t\s+want\s+to\s+(be\s+alive|live)/,
+    /not\s+want\s+to\s+live/, /better\s+off\s+dead/, /end\s+it\s+all/,
+    /no\s+reason\s+to\s+live/, /take\s+my\s+(own\s+)?life/
+  ];
+  function checkRisk(text) {
+    const n = String(text).toLowerCase();
+    return RISK_PATTERNS.some((re) => re.test(n)) || C.riskKeywords.some((k) => n.includes(k));
+  }
+  async function maybeRisk(text) {
+    if (!text || !checkRisk(text)) return false;
+    log("clover", "[RISK DETECTED]");
+    await say(C.riskResponse, { typingMs: 1200 });
+    return true;
+  }
+
+  function fillValues(text) {
+    const v = settings.values || [];
+    return String(text)
+      .replaceAll("{V1}", v[0] || "Self-Growth")
+      .replaceAll("{V2}", v[1] || "Feeling Hopeful")
+      .replaceAll("{V3}", v[2] || "Authenticity");
+  }
+
+  function classifyMood(text, metaphor) {
+    const n = String(text).toLowerCase().trim();
+    // Exact chip label match first (chips send the option text verbatim).
+    for (const o of metaphor.options) {
+      if (n === o.t.toLowerCase()) return o.v;
+    }
+    // Keyword fallback: longest keyword wins, so "half full" beats "full".
+    let best = null, bestLen = 0;
+    for (const o of metaphor.options) {
+      for (const k of o.k) {
+        if (n.includes(k) && k.length > bestLen) { best = o.v; bestLen = k.length; }
+      }
+    }
+    if (best) return best;
+    if (C.moodWordsNeg.some((w) => n.includes(w))) return "kneg";
+    if (C.moodWordsPos.some((w) => n.includes(w))) return "kpos";
+    return "neu";
+  }
+
+  const NOT_DONE = ["no", "not yet", "didn't", "didnt", "did not", "forgot", "couldn't", "couldnt", "nope", "haven't", "havent", "no time"];
+  function saysNotDone(text) {
+    const n = String(text).toLowerCase().trim();
+    return NOT_DONE.some((w) => n === w || n.startsWith(w + " ") || n.startsWith(w + ",") || n.includes(" " + w + " ") || n.endsWith(" " + w));
+  }
+
+  /* Run scripted steps (no AI — the next scripted line always responds).
+     On the first question: an explicit swap request returns "swapped";
+     a disengaged answer ("I don't know", "nothing", ...) returns
+     "disengaged" so the caller can offer the other question or wrap up. */
+  async function runSteps(steps, allowSwap, watchDisengage, aiClosing) {
+    let questionAsked = false;
+    // QIB: the ✨ closing line becomes the scripted-vs-AI compare point,
+    // fed with every question/answer pair from this exercise.
+    let closingIdx = -1;
+    if (aiClosing) {
+      steps.forEach((s, i) => { if (typeof s === "string" && s.trim().startsWith("✨")) closingIdx = i; });
+      if (closingIdx === -1) steps.forEach((s, i) => { if (typeof s === "string") closingIdx = i; });
+    }
+    const qa = [];
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      if (typeof step === "string") {
+        if (i === closingIdx && qa.length) await sayCompare(fillValues(step), { qa });
+        else await say(fillValues(step));
+        continue;
+      }
+      if (step.pause) { await pauseBeat(step.pause); continue; }
+
+      const q = fillValues(step.ask || step.askNR);
+      await say(q);
+
+      let chips = [];
+      if (allowSwap && !questionAsked) {
+        await say(pick(C.swapReminders), { typingMs: 800 });
+        chips = [{ label: "🔄 Swap question", value: "__swap__" }];
+      }
+
+      const reply = await waitForUser(chips);
+      if (!questionAsked) {
+        if (allowSwap && (reply.text === "__swap__" || wantsSwap(reply.text))) return "swapped";
+        if (watchDisengage && isDisengaged(reply.text)) return "disengaged";
+      }
+      questionAsked = true;
+      await maybeRisk(reply.text);
+      qa.push({ q, a: reply.text });
+    }
+    return "done";
+  }
+
+  const REACTION_CHIPS = [
+    { label: "👍", reaction: true }, { label: "❤️", reaction: true },
+    { label: "😂", reaction: true }, { label: "‼️", reaction: true }, { label: "😮", reaction: true }
+  ];
+
+  async function runAudioIntervention(dayInfo) {
+    const ex = dayInfo.exercise;
+    const isMf = dayInfo.cat === "mf";
+    const pre = C.mindfulnessPre.replaceAll("{NAME}", settings.voice || "Cathy");
+    log("clover", "[INTERVENTION " + dayInfo.cat + " W" + ex.week + " audio=" + ex.audioKey + "]");
+
+    await say(pre);
+    const audio = addAudioMessage(ex.audioKey, isMf ? "Guided mindfulness: " + ex.title : "Guided self-compassion exercise");
+    await wait(400);
+
+    let resolved = false;
+    const listenPromise = new Promise((resolve) => {
+      audio.addEventListener("ended", () => { if (!resolved) resolve({ text: "__finished__" }); });
+    });
+    const inputPromise = waitForUser([
+      { label: "✅ I finished the exercise", value: "__finished__" },
+      { label: "📖 Text version instead", value: "__swap__" }
+    ]);
+    const reply = await Promise.race([listenPromise, inputPromise]);
+    resolved = true;
+    if (state.pendingInput) state.pendingInput({ text: "__finished__", silent: true });
+
+    if (reply.text === "__swap__" || (reply.text !== "__finished__" && (wantsText(reply.text) || wantsSwap(reply.text)))) {
+      await say("Of course! Here's a text version 😊", { typingMs: 800 });
+      log("clover", "[SWAPPED to text version]");
+      await runSteps(ex.text, false);
+      return;
+    }
+    if (reply.text && reply.text !== "__finished__") await maybeRisk(reply.text);
+
+    // Post-audio tapback; the next message shows up regardless (10s window).
+    await say(pick(C.audioTapbacks), { typingMs: 800 });
+    await waitForUser(REACTION_CHIPS, { timeoutMs: 20000 });
+    await wait(300);
+
+    // Green ✨ affirmation sent as text after the tapback.
+    let green = ex.green;
+    if (!green) {
+      // MBSC: use the exercise's ✨ closing line.
+      const closings = ex.text.filter((s) => typeof s === "string" && s.startsWith("✨"));
+      green = closings[closings.length - 1] || "✨ Thank you for taking this moment for yourself.";
+    }
+    await say(green, { typingMs: 900 });
+  }
+
+  /* ================= Daily flow ================= */
+  async function runDay(dayInfo, prevDay) {
+    state.dayNum = dayInfo.day;
+    addSeparator("Day " + dayInfo.day);
+
+    // 1. Greeting
+    state.phase = "greeting";
+    await say(dayInfo.greeting);
+
+    // 2. Mood monitoring: follow-up (pos/neg) then acknowledgment for all.
+    state.phase = "mood";
+    const m = dayInfo.metaphor;
+    await say("How are you feeling today?\n\n" + m.options.map((o) => o.t + " – " + o.d).join("\n"));
+    const moodReply = await waitForUser(m.options.map((o) => ({ label: o.t, value: o.t })));
+    await maybeRisk(moodReply.text);
+    const mood = classifyMood(moodReply.text, m);
+    log("clover", "[MOOD=" + mood + "]");
+
+    if (mood === "pos" || mood === "kpos") {
+      const followQ = rotPick("moodFollowPos", C.moodFollowPos);
+      await say(followQ);
+      const r = await waitForUser();
+      const risky = await maybeRisk(r.text);
+      const ack = rotPick("ackPos", C.ackPos);
+      if (risky) await say(ack);
+      else await sayCompare(ack, { qa: [{ q: followQ, a: r.text }] });
+    } else if (mood === "neg" || mood === "kneg") {
+      const followQ = rotPick("moodFollowNeg", C.moodFollowNeg);
+      await say(followQ);
+      const r = await waitForUser();
+      const risky = await maybeRisk(r.text);
+      if (!risky) {
+        if (isDisengaged(r.text)) {
+          // Can't think of anything → offer two small BA-style ideas, then validate.
+          const a = pick(C.moodSuggestions);
+          let b = pick(C.moodSuggestions);
+          while (b === a) b = pick(C.moodSuggestions);
+          await say("That's okay — sometimes it's hard to think of ideas. Here are a couple of small things you could try: " + a + ", or " + b);
+        } else {
+          await say(rotPick("negIdeaAck", C.negIdeaAck));
+        }
+      }
+      const ack = rotPick("ackNeg", C.ackNeg);
+      if (risky) await say(ack);
+      else await sayCompare(ack, { qa: [{ q: followQ, a: r.text }] });
+    } else {
+      // Neutral: no follow-up question, just the acknowledgment. No AI (per spec).
+      await say(rotPick("ackNeu", C.ackNeu));
+    }
+
+    // 3. Challenge check-in (yesterday's challenge)
+    if (prevDay && prevDay.ba && prevDay.ba.checkin) {
+      state.phase = "ba-checkin";
+      addSeparator("💪 Challenge Check-In");
+      await say(prevDay.ba.checkin);
+      const r = await waitForUser();
+      const risky = await maybeRisk(r.text);
+      if (!risky) {
+        const scripted = saysNotDone(r.text) ? prevDay.ba.notDone : prevDay.ba.done;
+        await sayCompare(scripted, { qa: [{ q: prevDay.ba.checkin, a: r.text }] });
+      }
+    }
+
+    // 4. Fun fact, led by a mood-matched opener
+    state.phase = "funfact";
+    addSeparator("🤔 Fun Fact of the Day");
+    const bucket = (mood === "pos" || mood === "kpos") ? "pos" : (mood === "neg" || mood === "kneg") ? "neg" : "neu";
+    await say(pick(C.funFactOpeners[bucket]));
+    const ff = dayInfo.funFact;
+    if (ff.type === "s") {
+      await say(ff.text);
+      await say(pick(C.funFactTapbacks), { typingMs: 800 });
+      await waitForUser(REACTION_CHIPS, { timeoutMs: 20000 });
+      await wait(300);
+    } else {
+      await say(ff.q);
+      const guess = await waitForUser();
+      await maybeRisk(guess.text);
+      await say(ff.a, { afterMs: 600 });
+    }
+
+    // 5. Exercise of the day
+    state.phase = "intervention";
+    addSeparator(dayInfo.final ? "🧘 Exercise of the Day 🍀" : "🧘 Exercise of the Day 💭");
+    const ex = dayInfo.exercise;
+    if (dayInfo.cat === "mf" || dayInfo.cat === "mb") {
+      await runAudioIntervention(dayInfo);
+    } else {
+      log("clover", "[INTERVENTION " + dayInfo.cat + " W" + ex.week + "," + ex.n + (ex.cancer ? " CANCER" : "") + (dayInfo.final ? " FINAL" : "") + "]");
+      const allowSwap = !!ex.swap && !dayInfo.final;
+      const GIVE_UP = "It's okay — thank you for showing up today. 💛";
+      let result = await runSteps(ex.def, allowSwap, true, true);
+      if (result === "swapped") {
+        await say("No problem at all! Let's try this one instead 😊", { typingMs: 800 });
+        log("clover", "[SWAPPED]");
+        result = await runSteps(ex.swap, false, true, true);
+        if (result === "disengaged") { log("clover", "[DISENGAGED after swap]"); await say(GIVE_UP, { typingMs: 900 }); }
+      } else if (result === "disengaged") {
+        if (allowSwap) {
+          await say("That's okay — some questions might not be the one you want to answer today. Here's a different one instead 😊", { typingMs: 800 });
+          log("clover", "[AUTO-SWAPPED disengaged]");
+          result = await runSteps(ex.swap, false, true, true);
+          if (result === "disengaged") { log("clover", "[DISENGAGED after swap]"); await say(GIVE_UP, { typingMs: 900 }); }
+        } else {
+          log("clover", "[DISENGAGED no swap]");
+          await say(GIVE_UP, { typingMs: 900 });
+        }
+      }
+    }
+
+    // 6-7. Badge + streak
+    state.phase = "badge";
+    await wait(300);
+    if (dayInfo.day === 28) {
+      await say(C.day28BadgeIntro);
+      addBadge(C.day28Badge);
+    } else {
+      addBadge("Day " + dayInfo.day + ": " + dayInfo.badge);
+    }
+    await wait(800);
+    const streak = totalCompleted() + 1; // this day completes right after
+    await say("Streak: " + streak + " day" + (streak > 1 ? "s" : "") + " 🔥", { typingMs: 600 });
+
+    // 8. Daily challenge
+    state.phase = "ba";
+    await say(dayInfo.ba.ch);
+
+    if (dayInfo.day === 28) {
+      await say("Thank you for spending these 28 days with me. Take care of yourself — you've shown you know how. 💛🍀");
+    }
+  }
+
+  /* ================= Onboarding ================= */
+  async function runOnboarding() {
+    state.phase = "onboarding";
+    state.dayNum = 0;
+    addSeparator("Getting to know you");
+
+    await say(C.onboardingIntro, { typingMs: 2200 });
+
+    // Interests
+    await say("What are your interests? Tap all that apply, then hit Done!");
+    const picked = [];
+    await new Promise((resolve) => {
+      const done = () => { state.pendingInput = null; chipsBar.innerHTML = ""; resolve(); };
+      state.pendingInput = done;
+      renderChips(C.interests.map((name) => ({
+        label: name,
+        onTap: (btn) => {
+          btn.classList.toggle("selected");
+          const i = picked.indexOf(name);
+          if (i >= 0) picked.splice(i, 1); else picked.push(name);
+        }
+      })).concat([
+        { label: "None of these", onTap: () => { picked.length = 0; addMessage("None of these", "sent"); done(); } },
+        { label: "Done ✅", onTap: () => { addMessage(picked.length ? picked.join(", ") : "(none)", "sent"); done(); } }
+      ]), done);
+      updateInputState(false);
+    });
+    settings.interests = picked;
+    await say(picked.length ? "Nice picks! I'll keep those in mind for your daily challenges ✨" : C.interestNoneAck);
+
+    // Cancer question
+    await say("Would you like Clover to ask you positive psychology exercises about your cancer experience?");
+    let r = await waitForUser([{ label: "Yes", value: "yes" }, { label: "No", value: "no" }]);
+    settings.cancerOK = /^y/i.test(r.text.trim());
+
+    // Values
+    await say("Which of these values are most important to you right now? Pick 3:\n\n" +
+      C.values.map((v) => "• " + v.name + ": " + v.def).join("\n"));
+    const vals = [];
+    await new Promise((resolve) => {
+      const done = () => { state.pendingInput = null; chipsBar.innerHTML = ""; resolve(); };
+      state.pendingInput = done;
+      renderChips(C.values.map((v) => ({
+        label: v.name,
+        onTap: (btn) => {
+          if (btn.classList.contains("selected")) {
+            btn.classList.remove("selected");
+            vals.splice(vals.indexOf(v.name), 1);
+          } else if (vals.length < 3) {
+            btn.classList.add("selected");
+            vals.push(v.name);
+          }
+          if (vals.length === 3) { addMessage(vals.join(", "), "sent"); done(); }
+        }
+      })), done);
+      updateInputState(false);
+    });
+    settings.values = vals;
+
+    // Check-in time
+    await say("What time of day would you like Clover to check in with you?");
+    r = await waitForUser([{ label: "Same time every day" }, { label: "Customize for each day of the week" }]);
+    if (/same/i.test(r.text)) {
+      await say("What time?");
+      const t = await waitForUser();
+      settings.checkinTime = "Every day at " + t.text;
+    } else {
+      await say("What time on each day? (You can type it like: Mon 6pm, Tue 7pm, Wed 6pm...)");
+      const t = await waitForUser();
+      settings.checkinTime = t.text;
+    }
+
+    // Deep question days
+    await say("Which two days of the week would you like Clover to ask you to reflect on deep thinking positive psychology questions? (Either choose two days of the week or say \"surprise me\" if you don't have a preference)");
+    const dd = [];
+    await new Promise((resolve) => {
+      const done = () => { state.pendingInput = null; chipsBar.innerHTML = ""; resolve(); };
+      state.pendingInput = done;
+      renderChips(WEEKDAYS.map((name, idx) => ({
+        label: name,
+        onTap: (btn) => {
+          if (btn.classList.contains("selected")) {
+            btn.classList.remove("selected");
+            dd.splice(dd.indexOf(idx), 1);
+          } else if (dd.length < 2) {
+            btn.classList.add("selected");
+            dd.push(idx);
+          }
+          if (dd.length === 2) {
+            addMessage(dd.map((i) => WEEKDAYS[i]).join(" and "), "sent");
+            done();
+          }
+        }
+      })).concat([{ label: "Surprise me 🎁", onTap: () => {
+        addMessage(dd.length ? dd.map((i) => WEEKDAYS[i]).join(" and ") + " and surprise me 🎁" : "Surprise me 🎁", "sent");
+        done();
+      } }]), done);
+      updateInputState(false);
+    });
+    settings.deepDays = dd;
+
+    // Voice choice with samples
+    await say("Some of the exercises you will do are mindfulness audio exercises. Clover's helper, Cathy or Cody, will guide you through them. Choose the voice you'd like to hear for mindfulness exercises.");
+    let previewAudio = null;
+    const playPreview = (name) => {
+      if (previewAudio) previewAudio.pause();
+      previewAudio = new Audio(BASE + "assets/audio2/preview-" + name.toLowerCase() + ".mp3");
+      previewAudio.play().catch(() => {});
+    };
+    r = await waitForUser([
+      { label: "▶️ Hear Cathy", onTap: () => playPreview("Cathy") },
+      { label: "▶️ Hear Cody", onTap: () => playPreview("Cody") },
+      { label: "Cathy 🎙️", value: "Cathy" },
+      { label: "Cody 🎙️", value: "Cody" }
+    ]);
+    if (previewAudio) previewAudio.pause();
+    settings.voice = /cody/i.test(r.text) ? "Cody" : "Cathy";
+
+    settings.onboarded = true;
+    saveSettings();
+    saveStateRemote();
+    await say("That's everything — you're all set! 🎉");
+  }
+
+  /* ================= Main (week panel, in-place) ================= */
+  let weekResolver = null;   // set while the flow is waiting at a boundary
+  let panelRefresh = () => {};
+
+  function buildWeekPanel() {
+    const panel = document.createElement("div");
+    panel.className = "test-controls";
+    panel.innerHTML = '<div class="test-controls-title">🍀 Clover<span>Interview 2 · ' + escapeHtml(PID.replace(/^qib-/, "")) + "</span></div>";
+    const btns = [];
+    for (let w = 1; w <= 4; w++) {
+      const b = document.createElement("button");
+      b.addEventListener("click", () => {
+        if (!settings.onboarded) { alert("Please finish the getting-to-know-you questions first 😊"); return; }
+        if (progressW[w] >= 7) { alert("Week " + w + " is already complete ✓"); return; }
+        if (!weekResolver) { alert("Please finish the current day first 😊"); return; }
+        const r = weekResolver;
+        weekResolver = null;
+        r({ type: "week", week: w });
+      });
+      btns.push(b);
+      panel.appendChild(b);
+    }
+    document.body.appendChild(panel);
+    panelRefresh = () => {
+      for (let w = 1; w <= 4; w++) {
+        const done = progressW[w];
+        btns[w - 1].textContent = "Week " + w + (done >= 7 ? " ✓" : done > 0 ? " · " + done + "/7" : "");
+        btns[w - 1].classList.toggle("active", done > 0 && done < 7);
+      }
+    };
+    panelRefresh();
+  }
+
+  /* Wait at a boundary: either the in-chat button or a week-panel click. */
+  function boundary(label) {
+    return new Promise((resolve) => {
+      let wrap = null;
+      weekResolver = (val) => { if (wrap) wrap.remove(); resolve(val); };
+      if (label) {
+        wrap = document.createElement("div");
+        wrap.className = "day-btn-wrap";
+        const btn = document.createElement("button");
+        btn.className = "day-btn";
+        btn.textContent = label;
+        btn.addEventListener("click", () => {
+          wrap.remove();
+          weekResolver = null;
+          resolve({ type: "continue" });
+        });
+        wrap.appendChild(btn);
+        messagesArea.appendChild(wrap);
+        scrollToBottom();
+      }
+    });
+  }
+
+  async function runWeek(schedule, w) {
+    while (progressW[w] < 7) {
+      const i = progressW[w];               // next day index within week
+      const globalIdx = (w - 1) * 7 + i;
+      await runDay(schedule[globalIdx], globalIdx > 0 ? schedule[globalIdx - 1] : null);
+      progressW[w] = i + 1;
+      saveProgress();
+      panelRefresh();
+      saveStateRemote();
+
+      if (progressW[w] >= 7) {
+        if (totalCompleted() >= 28) {
+          await say("You've completed the whole 28-day program! Thank you again 💛🍀");
+          return null;
+        }
+        await say("That's all of Week " + w + "! You can pick another week on the left whenever you're ready 🍀", { typingMs: 900 });
+        return null;
+      }
+      const choice = await boundary("Continue to Day " + (globalIdx + 2) + " →");
+      if (choice.type === "week") return choice.week;
+    }
+    return null;
+  }
+
+  async function main() {
+    updateStatusTime();
+    setInterval(updateStatusTime, 30000);
+    autosizeInput();
+    updateInputState(false);
+    document.getElementById("weekBadge").textContent = "Participant " + PID.replace(/^qib-/, "") + " · Interview 2";
+    buildWeekPanel();
+
+    await restoreFromRemote();
+    panelRefresh();
+
+    // Reopen-the-app feel: replay everything so far, then continue.
+    if (transcript.length) replayTranscript();
+
+    await wait(400);
+
+    if (!settings.onboarded) {
+      await runOnboarding();
+      panelRefresh();
+      await say("Use the Week 1–4 buttons on the left to start whenever you're ready 🍀", { typingMs: 900 });
+    } else if (!transcript.length) {
+      await say("Hi, it's Clover! 🍀 Great to see you again. Pick a week on the left whenever you're ready 💛", { typingMs: 1100 });
+    }
+
+    const schedule = buildSchedule();
+
+    if (totalCompleted() >= 28) {
+      await say("You've completed the whole 28-day program! Thank you again 💛🍀");
+      return;
+    }
+
+    let nextWeek = null;
+    while (true) {
+      if (nextWeek === null) {
+        const choice = await boundary(null);  // wait for a week-panel click
+        nextWeek = choice.week;
+      }
+      const w = nextWeek;
+      addSeparator("Week " + w);
+      nextWeek = await runWeek(schedule, w);
+      if (totalCompleted() >= 28) return;
+    }
+  }
+
+  /* ================= Setup panel ================= */
+  const overlay = document.getElementById("setupOverlay");
+  const statusEl = document.getElementById("setupStatus");
+
+  function openSetup() {
+    document.getElementById("cfgLogUrl").value = config.logUrl || "";
+    document.getElementById("cfgOffline").checked = config.offline;
+    statusEl.textContent = "Participant " + PID + " — days completed: " + totalCompleted() + "/28 (W1:" + progressW[1] + " W2:" + progressW[2] + " W3:" + progressW[3] + " W4:" + progressW[4] + ")";
+    statusEl.className = "setup-status";
+    overlay.classList.add("open");
+  }
+
+  document.getElementById("setupGear").addEventListener("click", openSetup);
+  document.getElementById("cfgClose").addEventListener("click", () => overlay.classList.remove("open"));
+  document.getElementById("cfgSave").addEventListener("click", () => {
+    config.logUrl = document.getElementById("cfgLogUrl").value.trim();
+    config.offline = document.getElementById("cfgOffline").checked;
+    saveConfig();
+    statusEl.textContent = "Saved.";
+    statusEl.className = "setup-status ok";
+  });
+  document.getElementById("cfgDownload").addEventListener("click", downloadTranscript);
+  const importInput = document.getElementById("cfgImportFile");
+  if (importInput) {
+    document.getElementById("cfgImport").addEventListener("click", () => importInput.click());
+    importInput.addEventListener("change", () => {
+      const file = importInput.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const data = JSON.parse(reader.result);
+          if (!data.settings || !Array.isArray(data.transcript)) throw new Error("not a Clover chat log");
+          if (data.pid && data.pid !== PID && !confirm("This log is for participant " + data.pid + " but this page is " + PID + ". Import anyway?")) return;
+          localStorage.setItem(K("settings"), JSON.stringify(data.settings));
+          if (data.progressW) localStorage.setItem(K("progressW"), JSON.stringify(data.progressW));
+          else localStorage.setItem(K("progress"), String(data.progress || 0));
+          localStorage.setItem(K("transcript"), JSON.stringify(data.transcript));
+          location.reload();
+        } catch (e) {
+          statusEl.textContent = "❌ Could not import: " + e.message + " (use the chatlog_..._.json file, not the .csv)";
+          statusEl.className = "setup-status err";
+        }
+      };
+      reader.readAsText(file);
+    });
+  }
+  document.getElementById("cfgResetAll").addEventListener("click", () => {
+    if (!confirm("Reset participant " + PID + " completely? Clears onboarding answers, progress, and the local chat history on this device.")) return;
+    ["settings", "progress", "progressW", "transcript"].forEach((n) => localStorage.removeItem(K(n)));
+    location.reload();
+  });
+
+  if (urlParams.get("setup")) setTimeout(openSetup, 400);
+
+  window.__cloverSchedule3 = buildSchedule;
+  main();
+})();

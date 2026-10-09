@@ -233,6 +233,15 @@ body {
   border-bottom-right-radius: 6px;
 }
 
+/* QIB: Gemini active-listening bubble (distinct from scripted gray). */
+.bubble.received.ai {
+  background: #d7f2db;
+  border: 1px solid #a9ddb3;
+}
+.bubble.received.ai::before {
+  background: #d7f2db;
+}
+
 .bubble.sent::before {
   content: "";
   position: absolute;
