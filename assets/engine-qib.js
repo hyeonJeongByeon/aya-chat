@@ -59,6 +59,33 @@
     saveSettings();
   }
 
+  /* No baked preset: pull the participant's interview-1 onboarding answers
+     from the backend (state saved under the base PID). The sheet may store
+     numeric PIDs ("041" -> 41), so a few spellings are tried. If interview 1
+     hasn't happened yet, onboarding simply runs in the QIB chat. */
+  async function importInterview1Settings() {
+    if (settings.onboarded || window.CLOVER_PRESET || !config.logUrl || config.offline) return;
+    const base = PID.replace(/^qib-/, "");
+    const n = Number(base);
+    const cands = [...new Set([base, isNaN(n) ? "" : String(n), isNaN(n) ? "" : n.toFixed(1)])].filter(Boolean);
+    for (const pid of cands) {
+      try {
+        const res = await fetch(config.logUrl + "?action=state&pid=" + encodeURIComponent(pid));
+        const data = await res.json();
+        const s = data && data.ok && data.state && data.state.settings;
+        if (s && s.onboarded) {
+          settings = Object.assign({}, settings, {
+            interests: s.interests || [], cancerOK: !!s.cancerOK, values: s.values || [],
+            deepDays: s.deepDays || [], voice: s.voice || "Cathy",
+            checkinTime: s.checkinTime || "", onboarded: true
+          });
+          saveSettings();
+          return;
+        }
+      } catch (e) { /* try next spelling */ }
+    }
+  }
+
   // Days completed per week: {1:0..7, 2:0..7, 3:0..7, 4:0..7}
   let progressW = loadJSON(K("progressW"), null);
   if (!progressW) {
@@ -1158,6 +1185,7 @@
     buildWeekPanel();
 
     await restoreFromRemote();
+    await importInterview1Settings();
     panelRefresh();
 
     // Reopen-the-app feel: replay everything so far, then continue.
