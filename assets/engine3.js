@@ -694,9 +694,9 @@
     }
     if (reply.text && reply.text !== "__finished__") await maybeRisk(reply.text);
 
-    // Post-audio tapback; the next message shows up regardless (10s window).
+    // Post-audio tapback; waits for the reaction before continuing.
     await say(pick(C.audioTapbacks), { typingMs: 800 });
-    await waitForUser(REACTION_CHIPS, { timeoutMs: 20000 });
+    await waitForUser(REACTION_CHIPS);  // waits for the reaction, no auto-advance
     await wait(300);
 
     // Green ✨ affirmation sent as text after the tapback.
@@ -772,7 +772,7 @@
     if (ff.type === "s") {
       await say(ff.text);
       await say(pick(C.funFactTapbacks), { typingMs: 800 });
-      await waitForUser(REACTION_CHIPS, { timeoutMs: 20000 });
+      await waitForUser(REACTION_CHIPS);  // waits for the reaction, no auto-advance
       await wait(300);
     } else {
       await say(ff.q);
