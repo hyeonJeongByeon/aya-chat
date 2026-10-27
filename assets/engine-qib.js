@@ -463,7 +463,7 @@
 
   function addAudioMessage(audioKey, caption) {
     const voice = (settings.voice || "Cathy").toLowerCase();
-    const src = BASE + "assets/audio2/" + audioKey + "-" + voice + ".mp3";
+    const src = BASE + "assets/audio2/" + audioKey + "-" + voice + ".mp3?v=2";
     const audio = renderAudio(src, caption);
     scrollToBottom();
     log("clover", "[AUDIO] " + audioKey + "-" + voice + ".mp3");
@@ -491,7 +491,7 @@
         else if (txt.startsWith("[BADGE] ")) renderBadge(txt.slice(8));
         else if (txt.startsWith("[AUDIO] ")) {
           const file = txt.slice(8);
-          renderAudio(BASE + "assets/audio2/" + file, "Guided audio exercise");
+          renderAudio(BASE + "assets/audio2/" + file + "?v=2", "Guided audio exercise");
         }
         else if (txt.startsWith("[")) { /* internal markers — skip */ }
         else renderMessage(txt, "received");
