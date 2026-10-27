@@ -938,7 +938,7 @@
     let previewAudio = null;
     const playPreview = (name) => {
       if (previewAudio) previewAudio.pause();
-      previewAudio = new Audio(BASE + "assets/audio2/preview-" + name.toLowerCase() + ".mp3");
+      previewAudio = new Audio(BASE + "assets/audio2/preview-" + name.toLowerCase() + ".mp3?v=2");
       previewAudio.play().catch(() => {});
     };
     r = await waitForUser([
