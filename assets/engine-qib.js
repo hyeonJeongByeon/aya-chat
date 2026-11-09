@@ -12,6 +12,11 @@
 (function () {
   const C = window.CLOVER3;
   const PID = String(window.CLOVER_PID || "test");
+  /* LOCAL_ONLY (CAB links): one shared URL used by many people. Each person's
+     conversation lives only in their own browser (localStorage) — nothing is
+     logged or restored from the central sheet, so participants never see each
+     other's chats. The backend is still used for the Gemini AI replies. */
+  const LOCAL_ONLY = !!window.CLOVER_LOCAL_ONLY;
   const BASE = window.CLOVER_BASE || "";
 
   /* ================= Seeded RNG ================= */
@@ -64,6 +69,7 @@
      numeric PIDs ("041" -> 41), so a few spellings are tried. If interview 1
      hasn't happened yet, onboarding simply runs in the QIB chat. */
   async function importInterview1Settings() {
+    if (LOCAL_ONLY) return;
     if (settings.onboarded || window.CLOVER_PRESET || !config.logUrl || config.offline) return;
     const base = PID.replace(/^qib-/, "");
     const n = Number(base);
@@ -272,6 +278,7 @@
   const remoteQueue = [];
   let remotePumping = false;
   function remoteLog(entry) {
+    if (LOCAL_ONLY) return;
     if (!config.logUrl || config.offline) return;
     remoteQueue.push(Object.assign({ action: "log" }, entry));
     pumpRemote();
@@ -288,6 +295,7 @@
   }
 
   async function saveStateRemote() {
+    if (LOCAL_ONLY) return;
     if (!config.logUrl || config.offline) return;
     try {
       await fetch(config.logUrl, {
@@ -300,6 +308,7 @@
   /* Cross-device backup: if this browser has nothing but a backend is
      configured, pull settings/progress/transcript from the sheet. */
   async function restoreFromRemote() {
+    if (LOCAL_ONLY) return false;
     if (!config.logUrl || config.offline) return false;
     if (settings.onboarded || transcript.length) return false;
     try {
