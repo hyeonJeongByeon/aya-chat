@@ -199,6 +199,12 @@
       });
     }
 
+    // Value-keyed alternates (Health -> day 14, Social Support -> day 15).
+    (settings.values || []).forEach((vName) => {
+      const alt = C.baValueAlts && C.baValueAlts[vName];
+      if (alt) baByDay[alt.day - 1] = alt.ba;
+    });
+
     let meaningIdx = 0, savIdx = 0, grIdx = 0, mfIdx = 0, mbIdx = 0;
     const days = [];
 
@@ -486,7 +492,7 @@
           }
         } else renderMessage(txt, "sent");
       } else {
-        if (txt.startsWith("[AI] ")) renderMessage("✨ " + txt.slice(5), "received", "ai");
+        if (txt.startsWith("[AI] ")) renderMessage(txt.slice(5), "received", "ai");
         else if (txt.startsWith("[HEADER] ")) renderSeparator(txt.slice(9));
         else if (txt.startsWith("[BADGE] ")) renderBadge(txt.slice(8));
         else if (txt.startsWith("[AUDIO] ")) {
@@ -615,24 +621,28 @@
     return DISENGAGE_RES.some((re) => re.test(n));
   }
 
+  /* The good thing is simply waking up feeling good. */
+  const WAKE_RE = /\b(woke|waking|wakes?)\s+up\b|\bthis morning\b/i;
+
   /* ================= QIB: Gemini active listening ================= */
   const QIB_PROMPT = [
     "You are Clover, a warm wellbeing chatbot texting with teen and young adult cancer survivors (ages ~15-29).",
     "You get a short exchange (Clover's questions, the participant's answers) and Clover's SCRIPTED response.",
     "Rewrite the scripted response into ONE improved message that shows real active listening:",
-    "- Open with a short, natural acknowledgment phrase specific to what they shared, then flow into the scripted message (keep its meaning, warmth, and any emoji; smooth the join so it reads as one or two natural sentences).",
+    "- Open with a short, natural acknowledgment phrase specific to what they shared, then flow into the scripted message (keep its meaning and warmth; smooth the join so it reads as one or two natural sentences).",
     "- PARAPHRASE their details instead of copying their words back. If they baked a vanilla cake, say 'whipping up a sweet, classic treat', not 'you baked a vanilla cake'.",
     "- Name the concrete things they mentioned (people, pets, places, activities, feelings). That is what makes someone feel heard.",
     "- If they answered several questions, weave the key details from ALL answers together.",
     "- If their answer is short or unengaged (like 'yes', 'ok', 'it was expected'), do NOT invent details. Stay close to the scripted response with only a light, gentle adjustment that matches their energy.",
     "- Match the emotional tone: upbeat for good news, gentle and validating on hard days.",
-    "- No questions. No advice. No new topics. At most one emoji. Under 40 words. Output ONLY the message text.",
+    "- No questions. No advice. No new topics. Under 40 words. Output ONLY the message text.",
+    "- Do NOT use any emojis, even when the scripted response contains them: drop the emojis and keep the words.",
     "- NEVER use em dashes (\u2014) or double hyphens (--) unless truly necessary. Join phrases with a period, comma, or exclamation point instead.",
     "- If they mention self-harm or crisis, ignore the format: respond with warmth and encourage them to contact their care team or call/text 988.",
     "",
     "Examples:",
     "Q: Did you get started on that task you've been avoiding? A: \"Yes, I got my oil changed\" SCRIPTED: \"It feels nice to make headway on something that's been on the to-do list for a long time.\" -> Knocking out that car maintenance chore! It feels so nice to make headway on something that's been on your to-do list for a long time.",
-    "Q: Is there a small thing you can think of to do that would help? A: \"call a friend\" SCRIPTED: \"Low days don't last forever, even when it feels like they will. You've gotten through hard days before 💛\" -> Reaching out to connect with someone who cares about you today is a caring choice. Low days don't last forever, even when it feels like they will. You've gotten through hard days before 💛",
+    "Q: Is there a small thing you can think of to do that would help? A: \"call a friend\" SCRIPTED: \"Low days don't last forever, even when it feels like they will. You've gotten through hard days before 💛\" -> Reaching out to connect with someone who cares about you today is a caring choice. Low days don't last forever, even when it feels like they will. You've gotten through hard days before.",
     "Q: How has your cancer experience changed the way you see your strengths / your priorities / what you care about? A: \"more confident with public speaking\" / \"appreciate my friends and family more\" / \"being in the moment more\" SCRIPTED: \"It takes courage to reflect on how your experiences have shaped you.\" -> It takes courage to reflect on how your experiences have shaped your public speaking confidence, your love for family, and your focus on staying in the moment.",
     "Q: Did you reach out and make plans with a friend? A: \"Yes\" SCRIPTED: \"It's always fun to hang out with someone who gets you!\" -> Taking that step to line up time together! It's always fun to hang out with someone who gets you."
   ].join("\n");
@@ -666,7 +676,7 @@
     const typing = addTypingIndicator();
     await wait(1200);
     typing.remove();
-    renderMessage("✨ " + text, "received", "ai");
+    renderMessage(text, "received", "ai");
     scrollToBottom();
     log("clover", "[AI] " + text);
     await wait(400);
@@ -759,17 +769,21 @@
       if (closingIdx === -1) steps.forEach((s, i) => { if (typeof s === "string") closingIdx = i; });
     }
     const qa = [];
+    // After each participant answer, Clover "thinks" 5-8s (scaled by answer
+    // length) before its next message (QIB intervention active listening).
+    let thinkMs = 0;
+    const takeThink = () => { const t = thinkMs; thinkMs = 0; return t ? { typingMs: t } : {}; };
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i];
       if (typeof step === "string") {
-        if (i === closingIdx && qa.length) await sayCompare(fillValues(step), { qa });
-        else await say(fillValues(step));
+        if (i === closingIdx && qa.length) await sayCompare(fillValues(step), { qa }, takeThink());
+        else await say(fillValues(step), takeThink());
         continue;
       }
       if (step.pause) { await pauseBeat(step.pause); continue; }
 
       const q = fillValues(step.ask || step.askNR);
-      await say(q);
+      await say(q, takeThink());
 
       let chips = [];
       if (allowSwap && !questionAsked) {
@@ -785,6 +799,7 @@
       questionAsked = true;
       await maybeRisk(reply.text);
       qa.push({ q, a: reply.text });
+      if (aiClosing) thinkMs = Math.max(5000, Math.min(8000, 4000 + reply.text.length * 40));
     }
     return "done";
   }
@@ -862,29 +877,30 @@
       await say(followQ);
       const r = await waitForUser();
       const risky = await maybeRisk(r.text);
-      const ack = rotPick("ackPos", C.ackPos);
-      if (risky) await say(ack);
-      else await sayCompare(ack, { qa: [{ q: followQ, a: r.text }] });
+      if (isDisengaged(r.text)) {
+        // "Nothing / I don't know" → savor-the-feeling acknowledgment, scripted only.
+        await say(rotPick("ackPosIdk", C.ackPosIdk));
+      } else {
+        const ack = WAKE_RE.test(r.text) ? rotPick("ackPosWake", C.ackPosWake) : rotPick("ackPos", C.ackPos);
+        if (risky) await say(ack);
+        else await sayCompare(ack, { qa: [{ q: followQ, a: r.text }] });
+      }
     } else if (mood === "neg" || mood === "kneg") {
       const followQ = rotPick("moodFollowNeg", C.moodFollowNeg);
       await say(followQ);
       const r = await waitForUser();
       const risky = await maybeRisk(r.text);
-      const ack = rotPick("ackNeg", C.ackNeg);
-      if (risky) {
-        await say(ack);
+      if (!risky && isDisengaged(r.text)) {
+        // "Nothing / I don't know" → no-pressure acknowledgment, scripted only.
+        await say(rotPick("ackNegIdk", C.ackNegIdk));
       } else {
-        let first;
-        if (isDisengaged(r.text)) {
-          // Can't think of anything → offer two small BA-style ideas, then validate.
-          const a = pick(C.moodSuggestions);
-          let b = pick(C.moodSuggestions);
-          while (b === a) b = pick(C.moodSuggestions);
-          first = "That's okay — sometimes it's hard to think of ideas. Here are a couple of small things you could try: " + a + ", or " + b;
+        const ack = rotPick("ackNeg", C.ackNeg);
+        if (risky) {
+          await say(ack);
         } else {
-          first = rotPick("negIdeaAck", C.negIdeaAck);
+          const first = rotPick("negIdeaAck", C.negIdeaAck);
+          await sayCompare([first, ack], { qa: [{ q: followQ, a: r.text }] });
         }
-        await sayCompare([first, ack], { qa: [{ q: followQ, a: r.text }] });
       }
     } else {
       // Neutral: no follow-up question, just the acknowledgment. No AI (per spec).
@@ -899,8 +915,12 @@
       const r = await waitForUser();
       const risky = await maybeRisk(r.text);
       if (!risky) {
-        const scripted = saysNotDone(r.text) ? prevDay.ba.notDone : prevDay.ba.done;
-        await sayCompare(scripted, { qa: [{ q: prevDay.ba.checkin, a: r.text }] });
+        if (saysNotDone(r.text)) {
+          // Non-completion: scripted acknowledgment as is, no AI version.
+          await say(prevDay.ba.notDone);
+        } else {
+          await sayCompare(prevDay.ba.done, { qa: [{ q: prevDay.ba.checkin, a: r.text }] });
+        }
       }
     }
 
@@ -980,6 +1000,7 @@
     addSeparator("Getting to know you");
 
     await say(C.onboardingIntro, { typingMs: 2200 });
+    await say(C.onboardingIntro2, { typingMs: 900 });
 
     // Interests
     await say("What are your interests? Tap all that apply, then hit Done!");
@@ -1012,8 +1033,9 @@
     await say("Which of these values are most important to you right now? Pick 3:\n\n" +
       C.values.map((v) => "• " + v.name + ": " + v.def).join("\n"));
     const vals = [];
+    chipsBar.classList.add("compact");
     await new Promise((resolve) => {
-      const done = () => { state.pendingInput = null; chipsBar.innerHTML = ""; resolve(); };
+      const done = () => { state.pendingInput = null; chipsBar.innerHTML = ""; chipsBar.classList.remove("compact"); resolve(); };
       state.pendingInput = done;
       renderChips(C.values.map((v) => ({
         label: v.name,

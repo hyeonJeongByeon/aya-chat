@@ -163,6 +163,12 @@
       });
     }
 
+    // Value-keyed alternates (Health -> day 14, Social Support -> day 15).
+    (settings.values || []).forEach((vName) => {
+      const alt = C.baValueAlts && C.baValueAlts[vName];
+      if (alt) baByDay[alt.day - 1] = alt.ba;
+    });
+
     let meaningIdx = 0, savIdx = 0, grIdx = 0, mfIdx = 0, mbIdx = 0;
     const days = [];
 
@@ -577,6 +583,9 @@
     return DISENGAGE_RES.some((re) => re.test(n));
   }
 
+  /* The good thing is simply waking up feeling good. */
+  const WAKE_RE = /\b(woke|waking|wakes?)\s+up\b|\bthis morning\b/i;
+
   const RISK_PATTERNS = [
     /kill(ing)?\s+(myself|me)/, /suicid/, /end(ing)?\s+my\s+life/,
     /want(ed)?\s+to\s+die/, /wanna\s+die/, /rather\s+be\s+dead/,
@@ -731,23 +740,25 @@
       await say(rotPick("moodFollowPos", C.moodFollowPos));
       const r = await waitForUser();
       await maybeRisk(r.text);
-      await say(rotPick("ackPos", C.ackPos));
+      if (isDisengaged(r.text)) {
+        // "Nothing / I don't know" → savor-the-feeling acknowledgment only.
+        await say(rotPick("ackPosIdk", C.ackPosIdk));
+      } else if (WAKE_RE.test(r.text)) {
+        await say(rotPick("ackPosWake", C.ackPosWake));
+      } else {
+        await say(rotPick("ackPos", C.ackPos));
+      }
     } else if (mood === "neg" || mood === "kneg") {
       await say(rotPick("moodFollowNeg", C.moodFollowNeg));
       const r = await waitForUser();
       const risky = await maybeRisk(r.text);
-      if (!risky) {
-        if (isDisengaged(r.text)) {
-          // Can't think of anything → offer two small BA-style ideas, then validate.
-          const a = pick(C.moodSuggestions);
-          let b = pick(C.moodSuggestions);
-          while (b === a) b = pick(C.moodSuggestions);
-          await say("That's okay — sometimes it's hard to think of ideas. Here are a couple of small things you could try: " + a + ", or " + b);
-        } else {
-          await say(rotPick("negIdeaAck", C.negIdeaAck));
-        }
+      if (!risky && isDisengaged(r.text)) {
+        // "Nothing / I don't know" → no-pressure acknowledgment only.
+        await say(rotPick("ackNegIdk", C.ackNegIdk));
+      } else {
+        if (!risky) await say(rotPick("negIdeaAck", C.negIdeaAck));
+        await say(rotPick("ackNeg", C.ackNeg));
       }
-      await say(rotPick("ackNeg", C.ackNeg));
     } else {
       // Neutral: no follow-up question, just the acknowledgment.
       await say(rotPick("ackNeu", C.ackNeu));
@@ -839,6 +850,7 @@
     addSeparator("Getting to know you");
 
     await say(C.onboardingIntro, { typingMs: 2200 });
+    await say(C.onboardingIntro2, { typingMs: 900 });
 
     // Interests
     await say("What are your interests? Tap all that apply, then hit Done!");

@@ -685,3 +685,7 @@ body.testing { padding-left: 200px; }
   body.testing { padding-left: 0; padding-top: 60px; }
   body.testing .iphone { width: 100%; }
 }
+
+/* Compact chip layout for long option lists (onboarding values). */
+.chips-bar.compact { gap: 4px; padding: 4px 10px; }
+.chips-bar.compact .chip { padding: 4px 9px; font-size: 12.5px; border-width: 1px; border-radius: 14px; }

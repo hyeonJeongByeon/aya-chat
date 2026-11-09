@@ -187,17 +187,8 @@ window.CLOVER3 = (function () {
   ];
 
   const funFactTapbacks = [
-    "Give a thumbs up, if you learned something new",
-    "React with a heart, if this fun fact made you smile",
-    "Thumbs up this message, if you were surprised by this fact",
-    "React with an emoji that sums up this fun fact",
-    "Give a heart, if you enjoyed this fun fact",
-    "Give a thumbs up, if you want more fun facts like this",
-    "React with a heart, if you would share this fun fact with a friend.",
-    "React with a heart, if this fun fact made your day a little brighter",
-    "React with an exclamation mark, if you were today's years old when you learned this.",
-    "Give a thumbs up, if you already knew this fact!",
-    "React with a 🤣, if this fun fact made you laugh"
+    "React if you liked this fun fact.",
+    "React if you learned something new."
   ];
 
   const audioTapbacks = [
@@ -234,6 +225,33 @@ window.CLOVER3 = (function () {
     "sending a meme to a friend 😂",
     "watching a funny video 📱",
     "doing one small thing you love, just because ❤️"
+  ];
+
+  /* "Nothing / I don't know" to the POSITIVE mood follow-up. */
+  const ackPosIdk = [
+    "You don\u2019t always need to know why you\u2019re feeling good. Savoring the feeling is enough.",
+    "Not knowing why you feel good doesn\u2019t make the feeling any less real. Enjoy the headspace!",
+    "Feeling good even when nothing specific happened is such a peaceful state of mind. It\u2019s lovely to simply enjoy a pleasant day.",
+    "You don\u2019t need a specific reason to have a good day. It\u2019s wonderful when that positive feeling simply exists all on its own.",
+    "It\u2019s nice when a good day just happens without knowing why. Bask in that good energy showing up for you today.",
+    "Always a fan of some mystery dopamine"
+  ];
+
+  /* "Nothing / I don't know" to the NEGATIVE mood follow-up. */
+  const ackNegIdk = [
+    "When things feel heavy, it makes sense if nothing comes to mind. It\u2019s okay if you don\u2019t want to fix it right now.",
+    "Not knowing what might help is completely okay when you\u2019re feeling drained. You don\u2019t need to have all the answers right now.",
+    "Trying to figure out how to feel better is exhausting, especially when you\u2019re already feeling low. It\u2019s totally fine to not know today",
+    "Feeling like nothing feels real when a hard day hits. Giving yourself space to just exist is enough right now.",
+    "When you\u2019re completely tapped out, trying to find a fix feels impossible. Don\u2019t feel obligated to do anything right now.",
+    "Feeling like nothing will help is so frustrating when you\u2019re already low. Just getting through the day speaks volumes to your resilience."
+  ];
+
+  /* Positive mood where the good thing is simply waking up feeling good. */
+  const ackPosWake = [
+    "There is nothing quite like starting the day already refreshed and content. Hope it sets the tone for everything ahead",
+    "Opening your eyes and just feeling good right off the bat is such a sweet win. Soak in every bit of that sunshine today",
+    "Starting the morning already feeling light and ready makes all the difference. Hope that great energy carries you all the way through!"
   ];
 
   /* Quick acknowledgment when they DO name something that could help,
@@ -290,7 +308,8 @@ window.CLOVER3 = (function () {
 
   /* ============ Onboarding options ============ */
   const interestNoneAck = "No problem, thanks for letting me know.";
-  const onboardingIntro = "Hi, I'm Clover! We will be doing a 28-day positive psychology program together. I'll check in every day, ask questions, and suggest activities for you to do. Our daily check-ins will follow the same general flow, but I'll share different Questions of the Day and Daily Challenges. I'd like to start with some getting to know you questions.";
+  const onboardingIntro = "Hi, I\u2019m Clover! We are starting a 28-day challenge together. Our brief check-ins will follow a similar routine every day, but with new questions to think on and activities to try. Questions and activities are based in science and co-designed with medical providers and teens and young adults. Practicing consistently will help you build healthy mental health habits.";
+  const onboardingIntro2 = "Let\u2019s get started with some getting to know you questions.";
 
   const interests = [
     "Sports", "Reading", "Baking", "TV", "Video games", "Fashion",
@@ -306,7 +325,9 @@ window.CLOVER3 = (function () {
     { name: "Safety and Security", def: "to be safe and secure" },
     { name: "Caring for Others", def: "to take care of others" },
     { name: "Authenticity", def: "to act in a manner that is true to who I am" },
-    { name: "Self-Acceptance", def: "to accept (love) myself as I am" }
+    { name: "Self-Acceptance", def: "to accept (love) myself as I am" },
+    { name: "Health", def: "taking care of my body and mind" },
+    { name: "Social Support", def: "feeling connected to and supported by the people around me" }
   ];
 
   /* ============ Badges — fixed by day ============ */
@@ -955,11 +976,25 @@ window.CLOVER3 = (function () {
     "That's a really thoughtful reflection. 🌱"
   ];
 
+  /* Alternate daily challenges keyed to onboarding VALUES (fixed days). */
+  const baValueAlts = {
+    "Health": { day: 14, ba: {
+      ch: "Daily challenge: Make one small intentional action today, that your body will appreciate tomorrow. I'm excited to hear how you took care of yourself tomorrow!",
+      checkin: "What did you go with? Did your body notice the difference, even a little?",
+      done: "Small choices like that add up more than you\u2019d think. You showed up for yourself today, and that counts.",
+      notDone: "No stress. Taking care of yourself isn\u2019t a one-day test. Tomorrow\u2019s a fresh chance to try one small thing." } },
+    "Social Support": { day: 15, ba: {
+      ch: "Daily challenge: Write a short thank you note to someone who you know is always in your corner, even a mental thank you note is meaningful. Looking forward to hearing about what you thought of tomorrow!",
+      checkin: "Who came to mind, how did it feel to think about your relationship with them?",
+      done: "That\u2019s awesome! Even small moments of reflection on our important connections can brighten your day and theirs.",
+      notDone: "That\u2019s okay. Reflecting can take energy, and it\u2019s not always the right day. Your people will still be there when you\u2019re ready." } }
+  };
+
   return {
     greetings, moodMetaphors, moodWordsPos, moodWordsNeg, moodWordsNeu,
     moodFollowPos, moodFollowNeg, ackPos, ackNeu, ackNeg,
     funFacts, funFactTapbacks, audioTapbacks, swapReminders, funFactOpeners,
-    moodSuggestions, negIdeaAck,
+    moodSuggestions, negIdeaAck, ackPosIdk, ackNegIdk, ackPosWake, baValueAlts, onboardingIntro2,
     riskKeywords, riskResponse,
     onboardingIntro, interestNoneAck, interests, values,
     badges, day28BadgeIntro, day28Badge, affirmations,
