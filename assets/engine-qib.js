@@ -1008,8 +1008,9 @@
     // Interests
     await say("What are your interests? Tap all that apply, then hit Done!");
     const picked = [];
+    chipsBar.classList.add("compact");
     await new Promise((resolve) => {
-      const done = () => { state.pendingInput = null; chipsBar.innerHTML = ""; resolve(); };
+      const done = () => { state.pendingInput = null; chipsBar.innerHTML = ""; chipsBar.classList.remove("compact"); resolve(); };
       state.pendingInput = done;
       renderChips(C.interests.map((name) => ({
         label: name,
