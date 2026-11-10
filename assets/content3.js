@@ -313,8 +313,8 @@ window.CLOVER3 = (function () {
 
   const interests = [
     "Sports", "Reading", "Baking", "TV", "Video games", "Fashion",
-    "Writing/journaling", "Photography", "Podcasts", "Playing Musical Instruments",
-    "Plants", "Makeup/Beauty", "Fitness"
+    "Writing/journaling", "Photography", "Playing Musical Instruments",
+    "Plants", "Makeup/Beauty", "Fitness", "Social Support", "Health"
   ];
 
   const values = [
@@ -325,9 +325,7 @@ window.CLOVER3 = (function () {
     { name: "Safety and Security", def: "to be safe and secure" },
     { name: "Caring for Others", def: "to take care of others" },
     { name: "Authenticity", def: "to act in a manner that is true to who I am" },
-    { name: "Self-Acceptance", def: "to accept (love) myself as I am" },
-    { name: "Health", def: "taking care of my body and mind" },
-    { name: "Social Support", def: "feeling connected to and supported by the people around me" }
+    { name: "Self-Acceptance", def: "to accept (love) myself as I am" }
   ];
 
   /* ============ Badges — fixed by day ============ */
@@ -453,10 +451,10 @@ window.CLOVER3 = (function () {
       checkin: "Hey Picasso, did you get the chance to make something? 🎨",
       done: "Regardless of whether or not it is worthy of being in a gallery, you made something that didn't exist before. I think that's cool",
       notDone: "The creative canvas in your brain is waiting until you can put it down!" },
-    { ch: "Daily challenge: Listen to one song you've never heard before. Any genre, any era 🎧 I'm looking forward to hearing about what you listened to tomorrow 😆",
-      checkin: "What song did you end up playing? Was it 🔥 🎧",
-      done: "Can't find a hidden gem without looking, always worth exploring new music.",
-      notDone: "You can circle back to that new song when you can." },
+    { ch: "Daily challenge: Try one thing to give yourself a little energy boost. Maybe put on your favorite song and dance, take a quick walk, get some extra sleep, or take a break from your screen. Pick something that feels good to you.",
+      checkin: "Did you try something energizing?",
+      done: "Way to make time for yourself and try something to give you an extra pep in your step.",
+      notDone: "No worries if you didn't get around to it. There's always another chance to try something that helps you feel a little more energized." },
     { ch: "Final Challenge: Do one thing today that feels like celebrating — however big or small that might look! 🎉",
       checkin: "", done: "", notDone: "" }
   ];
@@ -495,10 +493,14 @@ window.CLOVER3 = (function () {
       checkin: "What caught your eye that you captured on camera? 📸",
       done: "There's something amazing about capturing a moment, and I'm glad you caught a great one",
       notDone: "No worries, look around and try snapping a few photos — even small moments can be worth capturing on camera" },
-    "Podcasts": { ch: "Daily Challenge: put on an episode of your favorite podcast that's really calling your name and let it play while life happens around you 🎧 I'm looking forward to hearing about what you listened to tomorrow 😆",
-      checkin: "What podcast did you listen to? Was there a moment that really stuck with you? 🎧",
-      done: "Way to go! Taking time for something that interests you is a simple way to take care of yourself.",
-      notDone: "No worries, maybe next time you're commuting, running an errand, or doing house chores, you can listen to a podcast." },
+    "Health": { ch: "Daily Challenge: Take an intentional action today that your body will appreciate tomorrow. Could be sleep, exercise, skin care, drinking more water, anything you could do to treat your body right. I'm excited to hear how you took care of yourself tomorrow!",
+      checkin: "What action did you take to treat your body right? Did your body notice the difference, even a little?",
+      done: "Small choices like that add up more than you'd think. You showed up for yourself today, and that counts.",
+      notDone: "No stress. Taking care of yourself isn't a one-day test. Tomorrow's a fresh chance to try one small thing." },
+    "Social Support": { ch: "Daily Challenge: Send a quick thank you text message to someone who you know is always in your corner. Looking forward to hearing about who you thought of tomorrow!",
+      checkin: "Did you send a text to someone that you're thankful for?",
+      done: "That's awesome! Even small moments of connection can brighten your day and theirs.",
+      notDone: "That's okay. Reaching out can take energy, and it's not always the right day. You can try this challenge again any time you'd like." },
     "Playing Musical Instruments": { ch: "Daily challenge: pick up your instrument of choice and jam a little bit, see if you can put together a sick melody 🎶🎹 Tomorrow, I'd love to hear about your jam sesh ☺️",
       checkin: "How was the jam sesh? 🎶🎹",
       done: "Doesn't matter if it was like Bach or noise — sometimes your hands just need something fun to do",
@@ -976,25 +978,11 @@ window.CLOVER3 = (function () {
     "That's a really thoughtful reflection. 🌱"
   ];
 
-  /* Alternate daily challenges keyed to onboarding VALUES (fixed days). */
-  const baValueAlts = {
-    "Health": { day: 14, ba: {
-      ch: "Daily challenge: Make one small intentional action today, that your body will appreciate tomorrow. I'm excited to hear how you took care of yourself tomorrow!",
-      checkin: "What did you go with? Did your body notice the difference, even a little?",
-      done: "Small choices like that add up more than you\u2019d think. You showed up for yourself today, and that counts.",
-      notDone: "No stress. Taking care of yourself isn\u2019t a one-day test. Tomorrow\u2019s a fresh chance to try one small thing." } },
-    "Social Support": { day: 15, ba: {
-      ch: "Daily challenge: Write a short thank you note to someone who you know is always in your corner, even a mental thank you note is meaningful. Looking forward to hearing about what you thought of tomorrow!",
-      checkin: "Who came to mind, how did it feel to think about your relationship with them?",
-      done: "That\u2019s awesome! Even small moments of reflection on our important connections can brighten your day and theirs.",
-      notDone: "That\u2019s okay. Reflecting can take energy, and it\u2019s not always the right day. Your people will still be there when you\u2019re ready." } }
-  };
-
   return {
     greetings, moodMetaphors, moodWordsPos, moodWordsNeg, moodWordsNeu,
     moodFollowPos, moodFollowNeg, ackPos, ackNeu, ackNeg,
     funFacts, funFactTapbacks, audioTapbacks, swapReminders, funFactOpeners,
-    moodSuggestions, negIdeaAck, ackPosIdk, ackNegIdk, ackPosWake, baValueAlts, onboardingIntro2,
+    moodSuggestions, negIdeaAck, ackPosIdk, ackNegIdk, ackPosWake, onboardingIntro2,
     riskKeywords, riskResponse,
     onboardingIntro, interestNoneAck, interests, values,
     badges, day28BadgeIntro, day28Badge, affirmations,

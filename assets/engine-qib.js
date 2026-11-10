@@ -205,12 +205,6 @@
       });
     }
 
-    // Value-keyed alternates (Health -> day 14, Social Support -> day 15).
-    (settings.values || []).forEach((vName) => {
-      const alt = C.baValueAlts && C.baValueAlts[vName];
-      if (alt) baByDay[alt.day - 1] = alt.ba;
-    });
-
     let meaningIdx = 0, savIdx = 0, grIdx = 0, mfIdx = 0, mbIdx = 0;
     const days = [];
 
