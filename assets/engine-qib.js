@@ -17,6 +17,10 @@
      logged or restored from the central sheet, so participants never see each
      other's chats. The backend is still used for the Gemini AI replies. */
   const LOCAL_ONLY = !!window.CLOVER_LOCAL_ONLY;
+  /* AI_ONLY: show just the AI-generated reply as a normal Clover message —
+     no "Scripted response"/"AI-generated response" headers, no green bubble.
+     Falls back to the scripted text silently if the AI is unavailable. */
+  const AI_ONLY = !!window.CLOVER_AI_ONLY;
   const BASE = window.CLOVER_BASE || "";
 
   /* ================= Seeded RNG ================= */
@@ -696,6 +700,23 @@
     const msgs = Array.isArray(scripted) ? scripted : [scripted];
     const baseline = msgs[msgs.length - 1];
     const aiPromise = aiCompose({ qa: ctx.qa, scripted: baseline });
+
+    if (AI_ONLY) {
+      for (const m of msgs.slice(0, -1)) await say(m);
+      const t0 = Date.now();
+      const typing = addTypingIndicator();
+      const aiText = await aiPromise;
+      const text = aiText || baseline;
+      const target = opts.typingMs ?? Math.min(900 + text.length * 12, 3000);
+      const left = target - (Date.now() - t0);
+      if (left > 0) await wait(left);
+      typing.remove();
+      renderMessage(text, "received");
+      scrollToBottom();
+      log("clover", (aiText ? "[AI] " : "") + text);
+      await wait(opts.afterMs ?? 500);
+      return;
+    }
 
     addSeparator("Scripted response");
     for (const m of msgs) await say(m, opts);
