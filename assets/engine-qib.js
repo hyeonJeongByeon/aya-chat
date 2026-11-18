@@ -783,8 +783,17 @@
      On the first question: an explicit swap request returns "swapped";
      a disengaged answer ("I don't know", "nothing", ...) returns
      "disengaged" so the caller can offer the other question or wrap up. */
-  async function runSteps(steps, allowSwap, watchDisengage, aiClosing) {
+  /* 8 s of typing-indicator wait per sentence in the bubble just sent,
+     before the next bubble appears (text-version exercises only). */
+  function countSentences(t) {
+    const s = String(t).replace(/…|\.{2,}/g, " "); // ellipses are pauses, not sentence ends
+    const m = s.match(/[.!?]+(?=["')\]]?(\s|$))/g);
+    return Math.max(1, m ? m.length : 1);
+  }
+
+  async function runSteps(steps, allowSwap, watchDisengage, aiClosing, paced) {
     let questionAsked = false;
+    let pacedMs = 0; // carried wait: 8 s per sentence of the previous bubble
     // QIB: the ✨ closing line becomes the scripted-vs-AI compare point,
     // fed with every question/answer pair from this exercise.
     let closingIdx = -1;
@@ -800,14 +809,27 @@
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i];
       if (typeof step === "string") {
-        if (i === closingIdx && qa.length) await sayCompare(fillValues(step), { qa }, takeThink());
-        else await say(fillValues(step), takeThink());
+        const msg = fillValues(step);
+        const o = takeThink();
+        if (paced && pacedMs && !o.typingMs) o.typingMs = pacedMs;
+        if (i === closingIdx && qa.length) await sayCompare(msg, { qa }, o);
+        else await say(msg, o);
+        if (paced) pacedMs = countSentences(msg) * 8000;
         continue;
       }
-      if (step.pause) { await pauseBeat(step.pause); continue; }
+      if (step.pause) {
+        await pauseBeat(step.pause);
+        if (paced) pacedMs = Math.max(0, pacedMs - step.pause * 1000); // the pause counts toward the wait
+        continue;
+      }
 
       const q = fillValues(step.ask || step.askNR);
-      await say(q, takeThink());
+      {
+        const o = takeThink();
+        if (paced && pacedMs && !o.typingMs) o.typingMs = pacedMs;
+        await say(q, o);
+        if (paced) pacedMs = 0; // the participant's reply resets the pacing
+      }
 
       let chips = [];
       if (allowSwap && !questionAsked) {
@@ -858,7 +880,7 @@
     if (reply.text === "__swap__" || (reply.text !== "__finished__" && (wantsText(reply.text) || wantsSwap(reply.text)))) {
       await say("Of course! Here's a text version 😊", { typingMs: 800 });
       log("clover", "[SWAPPED to text version]");
-      await runSteps(ex.text, false);
+      await runSteps(ex.text, false, false, false, true);
       return;
     }
     if (reply.text && reply.text !== "__finished__") await maybeRisk(reply.text);
