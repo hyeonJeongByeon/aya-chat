@@ -626,10 +626,32 @@
     return "neu";
   }
 
-  const NOT_DONE = ["no", "not yet", "didn't", "didnt", "did not", "forgot", "couldn't", "couldnt", "nope", "haven't", "havent", "no time"];
+  /* "Did you do the challenge?" — negative words only count when they are
+     about the challenge itself, not somewhere inside a longer story
+     ("I havent seen it in a while" is NOT a no). */
+  const NOT_DONE_SHORT = ["no", "nope", "nah", "not yet", "not really", "not today", "didn't", "didnt", "did not", "haven't", "havent", "forgot", "couldn't", "couldnt", "no time"];
+  const NOT_DONE_PHRASES = [
+    "not yet", "didn't do", "didnt do", "did not do", "didn't get to", "didnt get to",
+    "didn't get a chance", "didnt get a chance", "didn't get around", "didnt get around",
+    "didn't have time", "didnt have time", "no time to", "didn't try", "didnt try",
+    "didn't end up", "didnt end up", "didn't happen", "didnt happen",
+    "forgot to", "forgot about", "totally forgot", "completely forgot",
+    "couldn't do", "couldnt do", "couldn't get", "couldnt get", "couldn't find time", "couldnt find time",
+    "haven't done", "havent done", "haven't gotten", "havent gotten", "haven't tried", "havent tried",
+    "haven't had a chance", "havent had a chance", "haven't had time", "havent had time",
+    "haven't yet", "havent yet", "never got to", "skipped it"
+  ];
   function saysNotDone(text) {
-    const n = String(text).toLowerCase().trim();
-    return NOT_DONE.some((w) => n === w || n.startsWith(w + " ") || n.startsWith(w + ",") || n.includes(" " + w + " ") || n.endsWith(" " + w));
+    const n = String(text).toLowerCase().replace(/\s+/g, " ").trim();
+    // A reply that opens with a clear yes/doing-it is a yes.
+    if (/^(yes|yeah|yep|yup|i did|did it|i tried|just did|done)\b/.test(n)) return false;
+    // Short replies: a bare negative is about the challenge.
+    if (n.length <= 25) {
+      const padded = " " + n.replace(/[.,!?]/g, " ").replace(/\s+/g, " ").trim() + " ";
+      if (NOT_DONE_SHORT.some((w) => padded.includes(" " + w + " "))) return true;
+    }
+    // Phrases explicitly about not doing it (any length).
+    return NOT_DONE_PHRASES.some((w) => n.includes(w));
   }
 
   /* Run scripted steps (no AI — the next scripted line always responds).

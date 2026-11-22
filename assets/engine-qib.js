@@ -773,10 +773,70 @@
     return "neu";
   }
 
-  const NOT_DONE = ["no", "not yet", "didn't", "didnt", "did not", "forgot", "couldn't", "couldnt", "nope", "haven't", "havent", "no time"];
+  /* "Did you do the challenge?" — negative words only count when they are
+     about the challenge itself, not somewhere inside a longer story
+     ("I havent seen it in a while" is NOT a no). Fallback when the AI
+     classifier below is unreachable. */
+  const NOT_DONE_SHORT = ["no", "nope", "nah", "not yet", "not really", "not today", "didn't", "didnt", "did not", "haven't", "havent", "forgot", "couldn't", "couldnt", "no time"];
+  const NOT_DONE_PHRASES = [
+    "not yet", "didn't do", "didnt do", "did not do", "didn't get to", "didnt get to",
+    "didn't get a chance", "didnt get a chance", "didn't get around", "didnt get around",
+    "didn't have time", "didnt have time", "no time to", "didn't try", "didnt try",
+    "didn't end up", "didnt end up", "didn't happen", "didnt happen",
+    "forgot to", "forgot about", "totally forgot", "completely forgot",
+    "couldn't do", "couldnt do", "couldn't get", "couldnt get", "couldn't find time", "couldnt find time",
+    "haven't done", "havent done", "haven't gotten", "havent gotten", "haven't tried", "havent tried",
+    "haven't had a chance", "havent had a chance", "haven't had time", "havent had time",
+    "haven't yet", "havent yet", "never got to", "skipped it"
+  ];
   function saysNotDone(text) {
-    const n = String(text).toLowerCase().trim();
-    return NOT_DONE.some((w) => n === w || n.startsWith(w + " ") || n.startsWith(w + ",") || n.includes(" " + w + " ") || n.endsWith(" " + w));
+    const n = String(text).toLowerCase().replace(/\s+/g, " ").trim();
+    // A reply that opens with a clear yes/doing-it is a yes.
+    if (/^(yes|yeah|yep|yup|i did|did it|i tried|just did|done)\b/.test(n)) return false;
+    // Short replies: a bare negative is about the challenge.
+    if (n.length <= 25) {
+      const padded = " " + n.replace(/[.,!?]/g, " ").replace(/\s+/g, " ").trim() + " ";
+      if (NOT_DONE_SHORT.some((w) => padded.includes(" " + w + " "))) return true;
+    }
+    // Phrases explicitly about not doing it (any length).
+    return NOT_DONE_PHRASES.some((w) => n.includes(w));
+  }
+
+  /* AI check-in classifier: Gemini reads the whole reply and decides whether
+     the participant did the challenge. Returns "DONE", "NOTDONE", "UNCLEAR",
+     or null when the backend is unreachable (caller falls back to saysNotDone). */
+  const DONE_CLASSIFIER_PROMPT = [
+    "You are a strict classifier. Clover (a friendly chatbot) asked a participant whether they completed yesterday's small daily challenge.",
+    "Read the participant's reply and decide what it says about the challenge itself.",
+    "Respond with exactly one word and nothing else:",
+    "DONE - they did the challenge, fully or partly, or they describe actually doing it.",
+    "NOTDONE - they say they did not do it, have not done it yet, forgot, or ran out of time.",
+    "UNCLEAR - the reply does not say either way.",
+    "Important: negative words about other things do not mean NOTDONE. Example: \"I rewatched the movie, I havent seen it in a while so I didnt remember much\" is DONE - the negatives are about the movie, not about doing the challenge."
+  ].join("\n");
+
+  async function aiClassifyDone(checkinQ, answer) {
+    if (!config.logUrl || config.offline) return null;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10000);
+      const res = await fetch(config.logUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ action: "gemini", mode: "reflect", system: DONE_CLASSIFIER_PROMPT,
+          question: String(checkinQ).slice(0, 500), answer: String(answer).slice(0, 1500) }),
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+      const data = await res.json();
+      if (data.ok && data.text) {
+        const v = data.text.trim().toUpperCase();
+        if (v.startsWith("NOTDONE") || v.startsWith("NOT DONE") || v.startsWith("NOT_DONE")) return "NOTDONE";
+        if (v.startsWith("DONE")) return "DONE";
+        return "UNCLEAR";
+      }
+    } catch (e) { console.warn("QIB done-classifier unavailable:", e); }
+    return null;
   }
 
   /* Run scripted steps (no AI — the next scripted line always responds).
@@ -961,7 +1021,14 @@
       const r = await waitForUser();
       const risky = await maybeRisk(r.text);
       if (!risky) {
-        if (saysNotDone(r.text)) {
+        // Gemini reads the whole reply and decides done vs not-done; the
+        // word-list heuristic is only the fallback when the AI is unreachable.
+        const typing = addTypingIndicator();
+        const verdict = await aiClassifyDone(prevDay.ba.checkin, r.text);
+        typing.remove();
+        const notDone = verdict === "NOTDONE" ? true : verdict === "DONE" ? false : saysNotDone(r.text);
+        log("clover", "[BA check-in -> " + (notDone ? "notDone" : "done") + (verdict ? " (AI " + verdict + ")" : " (fallback)") + "]");
+        if (notDone) {
           // Non-completion: scripted acknowledgment as is, no AI version.
           await say(prevDay.ba.notDone);
         } else {
